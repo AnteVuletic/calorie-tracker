@@ -23,9 +23,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # Lockfile was generated with npm 11; GitHub's bundled npm 10 rejects it on `npm ci`.
-      - run: npm install -g npm@11.8.0
-      - run: npm ci
+      # Avoid `npm ci`: eslint (ajv@6) + workbox (ajv@8) leave a lockfile npm rejects on Linux.
+      - run: npm install
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
