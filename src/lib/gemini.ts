@@ -18,8 +18,8 @@ export type LabelScanResult = ScanResult & {
   basisGrams: number;
 };
 
-/** Prefer cost-efficient flash for photo/label parsing (2.0 Flash retired June 2026). */
-export const GEMINI_MODEL = "gemini-2.5-flash";
+/** Prefer cost-efficient flash for photo/label parsing (2.5 Flash retired for new users). */
+export const GEMINI_MODEL = "gemini-3.6-flash";
 
 const SENTINEL_LABELS = new Set([
   "not food",
