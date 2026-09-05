@@ -2,10 +2,22 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { toDayKey } from "@/lib/dates";
 import type { Meal, MealStatus, ScanMode } from "@/lib/types";
 
+/**
+ * IndexedDB row shape. Photos are stored as ArrayBuffer (+ mime), not Blob.
+ * Re-putting an IDB-retrieved Blob can leave a dead blob reference; browsers
+ * then throw NotFoundError ("The object can not be found here") on rescan.
+ */
+type MealRecord = Omit<Meal, "imageBlob"> & {
+  imageBytes?: ArrayBuffer;
+  imageMimeType?: string;
+  /** Legacy — converted to imageBytes on the next write */
+  imageBlob?: Blob;
+};
+
 interface CalorieDB extends DBSchema {
   meals: {
     key: string;
-    value: Meal;
+    value: MealRecord;
     indexes: { "by-day": string; "by-status": MealStatus };
   };
   settings: {
@@ -18,6 +30,9 @@ const DB_NAME = "calorie-tracker";
 const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<CalorieDB>> | null = null;
+
+const MISSING_PHOTO =
+  "Meal photo is missing — re-add the photo to scan";
 
 /** Map legacy "scanned" (and missing) statuses onto the current set. */
 function normalizeStatus(
@@ -35,9 +50,54 @@ function normalizeStatus(
   return "logged";
 }
 
-function normalizeMeal(raw: Meal): Meal {
+function hasImageBytes(
+  raw: MealRecord,
+): raw is MealRecord & { imageBytes: ArrayBuffer } {
+  return raw.imageBytes instanceof ArrayBuffer && raw.imageBytes.byteLength > 0;
+}
+
+async function blobToImageBytes(
+  blob: Blob,
+): Promise<{ imageBytes: ArrayBuffer; imageMimeType: string }> {
+  try {
+    const imageBytes = await blob.arrayBuffer();
+    if (imageBytes.byteLength <= 0) {
+      throw new Error("Meal photo is empty — re-add the photo to scan");
+    }
+    return {
+      imageBytes,
+      imageMimeType: blob.type || "image/jpeg",
+    };
+  } catch (err) {
+    if (err instanceof Error && /re-add the photo/i.test(err.message)) {
+      throw err;
+    }
+    throw new Error(MISSING_PHOTO);
+  }
+}
+
+function mealFromRecord(raw: MealRecord): Meal {
+  let imageBlob: Blob;
+  if (hasImageBytes(raw)) {
+    imageBlob = new Blob([raw.imageBytes], {
+      type: raw.imageMimeType || "image/jpeg",
+    });
+  } else if (raw.imageBlob instanceof Blob) {
+    imageBlob = raw.imageBlob;
+  } else {
+    imageBlob = new Blob();
+  }
+
   return {
-    ...raw,
+    id: raw.id,
+    createdAt: raw.createdAt,
+    dayKey: raw.dayKey,
+    imageBlob,
+    label: raw.label,
+    calories: raw.calories,
+    proteinG: raw.proteinG,
+    carbsG: raw.carbsG,
+    fatG: raw.fatG,
     status: normalizeStatus(raw.status as MealStatus | "scanned" | undefined),
     scanMode: raw.scanMode ?? "meal",
     portionRaw: raw.portionRaw,
@@ -46,6 +106,52 @@ function normalizeMeal(raw: Meal): Meal {
     nextAttemptAt: raw.nextAttemptAt,
     lastError: raw.lastError,
   };
+}
+
+async function toMealRecord(
+  meal: Meal,
+  existing?: MealRecord,
+): Promise<MealRecord> {
+  const { imageBlob: _discard, ...meta } = meal;
+
+  if (existing && hasImageBytes(existing)) {
+    return {
+      ...meta,
+      imageBytes: existing.imageBytes,
+      imageMimeType: existing.imageMimeType || "image/jpeg",
+    };
+  }
+
+  const sourceBlob =
+    meal.imageBlob?.size > 0
+      ? meal.imageBlob
+      : existing?.imageBlob instanceof Blob && existing.imageBlob.size > 0
+        ? existing.imageBlob
+        : null;
+
+  if (!sourceBlob) {
+    throw new Error(MISSING_PHOTO);
+  }
+
+  const { imageBytes, imageMimeType } = await blobToImageBytes(sourceBlob);
+  return { ...meta, imageBytes, imageMimeType };
+}
+
+async function putMealRecord(
+  db: IDBPDatabase<CalorieDB>,
+  record: MealRecord,
+): Promise<Meal> {
+  try {
+    await db.put("meals", record);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "QuotaExceededError") {
+      throw new Error(
+        "Storage full. Delete older meals or clear data in Settings.",
+      );
+    }
+    throw err;
+  }
+  return mealFromRecord(record);
 }
 
 function getDb() {
@@ -60,7 +166,7 @@ function getDb() {
           const store = transaction.objectStore("meals");
           let cursor = await store.openCursor();
           while (cursor) {
-            const value = cursor.value as Meal & {
+            const value = cursor.value as MealRecord & {
               status?: MealStatus | "scanned";
               scanMode?: ScanMode;
             };
@@ -81,7 +187,7 @@ function getDb() {
           const store = transaction.objectStore("meals");
           let cursor = await store.openCursor();
           while (cursor) {
-            const value = cursor.value as Meal & {
+            const value = cursor.value as MealRecord & {
               status?: MealStatus | "scanned";
             };
             const nextStatus = normalizeStatus(value.status);
@@ -119,44 +225,70 @@ function getDb() {
   return dbPromise;
 }
 
-/** Backfill status/scanMode and migrate legacy scanned → logged. */
+/**
+ * Backfill status/scanMode, re-queue stuck processing/fail, and convert legacy
+ * Blob photos to durable ArrayBuffers (outside long-lived cursors).
+ */
 export async function migrateMeals(): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction("meals", "readwrite");
-  let cursor = await tx.store.openCursor();
-  while (cursor) {
-    const value = cursor.value as Meal & {
-      status?: MealStatus | "scanned";
-      scanMode?: ScanMode;
-    };
+  const all = await db.getAll("meals");
+
+  for (const value of all) {
     const nextStatus = normalizeStatus(value.status);
     const nextMode = value.scanMode ?? "meal";
-    // Stuck processing (crashed tab) or terminal fail should re-enter the queue
-    // on reopen so a valid stored photo is scanned again without re-upload.
     const resetQueue =
       nextStatus === "processing" || nextStatus === "fail"
         ? ("pending" as const)
         : nextStatus;
-    const shouldResetRetries = resetQueue === "pending" && nextStatus !== "pending";
-    if (
+    const shouldResetRetries =
+      resetQueue === "pending" && nextStatus !== "pending";
+    const needsStatusFix =
       value.status !== resetQueue ||
       value.scanMode !== nextMode ||
       !value.status ||
       !value.scanMode ||
-      (shouldResetRetries && (value.retryCount || value.nextAttemptAt))
-    ) {
-      await cursor.update({
-        ...value,
+      (shouldResetRetries && (value.retryCount || value.nextAttemptAt));
+    const needsByteMigration = !hasImageBytes(value);
+
+    if (!needsStatusFix && !needsByteMigration) continue;
+
+    const meal = mealFromRecord({
+      ...value,
+      status: resetQueue,
+      scanMode: nextMode,
+      ...(shouldResetRetries
+        ? { retryCount: 0, nextAttemptAt: undefined }
+        : {}),
+    });
+
+    try {
+      const record = await toMealRecord(meal, value);
+      await putMealRecord(db, {
+        ...record,
         status: resetQueue,
         scanMode: nextMode,
         ...(shouldResetRetries
           ? { retryCount: 0, nextAttemptAt: undefined }
           : {}),
       });
+    } catch (err) {
+      // Photo unreadable — still apply status migration so the card shows fail.
+      if (!needsStatusFix) continue;
+      try {
+        await db.put("meals", {
+          ...value,
+          status: "fail",
+          scanMode: nextMode,
+          retryCount: value.retryCount ?? 0,
+          nextAttemptAt: undefined,
+          lastError:
+            err instanceof Error ? err.message : MISSING_PHOTO,
+        });
+      } catch {
+        /* ignore secondary write errors */
+      }
     }
-    cursor = await cursor.continue();
   }
-  await tx.done;
 }
 
 export type NewMealInput = Omit<Meal, "id" | "createdAt" | "dayKey">;
@@ -164,7 +296,7 @@ export type NewMealInput = Omit<Meal, "id" | "createdAt" | "dayKey">;
 export async function addMeal(meal: NewMealInput): Promise<Meal> {
   const db = await getDb();
   const now = new Date();
-  const record: Meal = {
+  const draft: Meal = {
     id: crypto.randomUUID(),
     createdAt: now.toISOString(),
     dayKey: toDayKey(now),
@@ -182,17 +314,8 @@ export async function addMeal(meal: NewMealInput): Promise<Meal> {
     nextAttemptAt: meal.nextAttemptAt,
     lastError: meal.lastError,
   };
-  try {
-    await db.put("meals", record);
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "QuotaExceededError") {
-      throw new Error(
-        "Storage full. Delete older meals or clear data in Settings.",
-      );
-    }
-    throw err;
-  }
-  return record;
+  const record = await toMealRecord(draft);
+  return putMealRecord(db, record);
 }
 
 export async function updateMeal(
@@ -204,24 +327,53 @@ export async function updateMeal(
   if (!existing) {
     throw new Error("Meal not found");
   }
-  const next: Meal = normalizeMeal({ ...existing, ...patch, id });
-  try {
-    await db.put("meals", next);
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "QuotaExceededError") {
-      throw new Error(
-        "Storage full. Delete older meals or clear data in Settings.",
-      );
-    }
-    throw err;
+
+  // Replacing the photo — encode fresh bytes and drop any legacy Blob field.
+  if (patch.imageBlob) {
+    const current = mealFromRecord(existing);
+    const next: Meal = { ...current, ...patch, id, imageBlob: patch.imageBlob };
+    const { imageBlob: _b, ...meta } = next;
+    const { imageBytes, imageMimeType } = await blobToImageBytes(patch.imageBlob);
+    return putMealRecord(db, { ...meta, imageBytes, imageMimeType });
   }
-  return next;
+
+  // Durable bytes already stored — copy them; never re-put a Blob handle.
+  if (hasImageBytes(existing)) {
+    const current = mealFromRecord(existing);
+    const next: Meal = { ...current, ...patch, id };
+    const { imageBlob: _b, ...meta } = next;
+    return putMealRecord(db, {
+      ...meta,
+      imageBytes: existing.imageBytes,
+      imageMimeType: existing.imageMimeType || "image/jpeg",
+    });
+  }
+
+  // Legacy Blob row: convert once to bytes. If the Blob is already dead,
+  // still allow metadata updates so Rescan can surface a clear error.
+  const current = mealFromRecord(existing);
+  const next: Meal = {
+    ...current,
+    ...patch,
+    id,
+    imageBlob: current.imageBlob,
+  };
+  try {
+    const record = await toMealRecord(next, existing);
+    return putMealRecord(db, record);
+  } catch {
+    const { imageBlob: _b, ...meta } = next;
+    return putMealRecord(db, {
+      ...meta,
+      imageBlob: existing.imageBlob,
+    });
+  }
 }
 
 export async function getMeal(id: string): Promise<Meal | undefined> {
   const db = await getDb();
   const meal = await db.get("meals", id);
-  return meal ? normalizeMeal(meal) : undefined;
+  return meal ? mealFromRecord(meal) : undefined;
 }
 
 export async function deleteMeal(id: string): Promise<void> {
@@ -232,7 +384,9 @@ export async function deleteMeal(id: string): Promise<void> {
 export async function getMealsByDay(dayKey: string): Promise<Meal[]> {
   const db = await getDb();
   const meals = await db.getAllFromIndex("meals", "by-day", dayKey);
-  return meals.map(normalizeMeal).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return meals
+    .map(mealFromRecord)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getMealsInRange(
@@ -246,7 +400,7 @@ export async function getMealsInRange(
     IDBKeyRange.bound(fromKey, toKey),
   );
   return meals
-    .map(normalizeMeal)
+    .map(mealFromRecord)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -255,7 +409,7 @@ export async function getLoggedLabelMeals(): Promise<Meal[]> {
   const db = await getDb();
   const meals = await db.getAll("meals");
   return meals
-    .map(normalizeMeal)
+    .map(mealFromRecord)
     .filter((meal) => meal.scanMode === "label" && meal.status === "logged")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
@@ -266,7 +420,7 @@ export async function getPendingMeals(now = new Date()): Promise<Meal[]> {
   const meals = await db.getAllFromIndex("meals", "by-status", "pending");
   const nowMs = now.getTime();
   return meals
-    .map(normalizeMeal)
+    .map(mealFromRecord)
     .filter((meal) => {
       if (!meal.nextAttemptAt) return true;
       const at = Date.parse(meal.nextAttemptAt);
@@ -283,7 +437,7 @@ export async function getEarliestPendingAttemptAt(): Promise<string | null> {
   let earliestMs = Infinity;
   const nowMs = Date.now();
   for (const raw of meals) {
-    const meal = normalizeMeal(raw);
+    const meal = mealFromRecord(raw);
     if (!meal.nextAttemptAt) continue;
     const at = Date.parse(meal.nextAttemptAt);
     if (!Number.isFinite(at) || at <= nowMs) continue;

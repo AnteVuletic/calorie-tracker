@@ -16,16 +16,24 @@ import {
 } from "@/lib/gemini";
 import { MAX_SCAN_RETRIES, type Meal } from "@/lib/types";
 
-/** Re-read bytes into a fresh Blob so FileReader / Gemini always get valid data. */
+/** Ensure Gemini gets a readable Blob (maps dead IDB blob refs to a clear error). */
 async function materializeImageBlob(blob: Blob | undefined): Promise<Blob> {
   if (!blob || blob.size <= 0) {
     throw new Error("Meal photo is missing — re-add the photo to scan");
   }
-  const buffer = await blob.arrayBuffer();
-  if (buffer.byteLength <= 0) {
-    throw new Error("Meal photo is empty — re-add the photo to scan");
+  try {
+    const buffer = await blob.arrayBuffer();
+    if (buffer.byteLength <= 0) {
+      throw new Error("Meal photo is empty — re-add the photo to scan");
+    }
+    return new Blob([buffer], { type: blob.type || "image/jpeg" });
+  } catch (err) {
+    if (err instanceof Error && /re-add the photo/i.test(err.message)) {
+      throw err;
+    }
+    // DOMException NotFoundError: "The object can not be found here."
+    throw new Error("Meal photo is missing — re-add the photo to scan");
   }
-  return new Blob([buffer], { type: blob.type || "image/jpeg" });
 }
 
 const MEALS_CHANGED = "calorie-tracker:meals-changed";
@@ -161,14 +169,14 @@ async function handleFailure(meal: Meal, message: string): Promise<void> {
 }
 
 async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
-  await updateMeal(meal.id, {
-    status: "processing",
-    lastError: undefined,
-    nextAttemptAt: undefined,
-  });
-  notifyMealsChanged();
-
   try {
+    await updateMeal(meal.id, {
+      status: "processing",
+      lastError: undefined,
+      nextAttemptAt: undefined,
+    });
+    notifyMealsChanged();
+
     // Fresh IDB read — don't rely on a Blob that may have been stale in memory.
     const fresh = (await getMeal(meal.id)) ?? meal;
     const imageBlob = await materializeImageBlob(fresh.imageBlob);
@@ -228,6 +236,17 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Scan failed — will retry later";
+    // Missing/corrupt photo won't fix itself — fail immediately.
+    if (/re-add the photo/i.test(message)) {
+      await updateMeal(meal.id, {
+        status: "fail",
+        retryCount: MAX_SCAN_RETRIES + 1,
+        nextAttemptAt: undefined,
+        lastError: message,
+        label: meal.label === "Pending scan…" ? "Scan failed" : meal.label,
+      });
+      return false;
+    }
     await handleFailure(meal, message);
     return false;
   }
