@@ -20,7 +20,10 @@ const updateSW = registerSW({
       action: {
         label: "Reload",
         onClick: () => {
-          void updateSW(true);
+          // Safari/iOS PWAs often never fire controllerchange after skipWaiting.
+          void updateSW(true).finally(() => {
+            window.location.reload();
+          });
         },
       },
     });

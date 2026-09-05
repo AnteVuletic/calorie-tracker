@@ -40,21 +40,23 @@ export default function App() {
 
   return (
     <div
-      className="bg-background min-h-full"
+      className="bg-background flex h-dvh flex-col"
       style={{
         paddingTop: "env(safe-area-inset-top)",
         backgroundImage:
           "radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 18%, transparent), transparent 60%)",
       }}
     >
-      <ErrorBoundary>
-        <Routes>
-          <Route path="/" element={<TodayPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </ErrorBoundary>
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<TodayPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
+      </main>
       <BottomNav />
       <Toaster richColors position="top-center" />
     </div>

@@ -85,7 +85,7 @@ export function HistoryPage() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-4 px-4 pb-28 pt-4">
+    <div className="mx-auto flex w-full max-w-lg flex-col gap-4 px-4 pt-4 pb-4">
       <header>
         <p className="text-muted-foreground text-sm">History</p>
         <h1 className="text-2xl font-semibold tracking-tight">All meals</h1>
