@@ -50,9 +50,10 @@ export function useMealsForDay(dayKey: string) {
   const [error, setError] = useState<string | null>(null);
   const genRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { quiet?: boolean }) => {
     const gen = ++genRef.current;
-    setLoading(true);
+    // Quiet refreshes (scan queue) keep cards mounted so blob: URLs stay valid.
+    if (!opts?.quiet) setLoading(true);
     setError(null);
     try {
       const next = await getMealsByDay(dayKey);
@@ -73,7 +74,10 @@ export function useMealsForDay(dayKey: string) {
     };
   }, [refresh]);
 
-  useEffect(() => subscribeMealsChanged(() => void refresh()), [refresh]);
+  useEffect(
+    () => subscribeMealsChanged(() => void refresh({ quiet: true })),
+    [refresh],
+  )
 
   return {
     meals,
@@ -120,9 +124,9 @@ export function useMealsRange(fromKey: string, toKey: string) {
   const [error, setError] = useState<string | null>(null);
   const genRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { quiet?: boolean }) => {
     const gen = ++genRef.current;
-    setLoading(true);
+    if (!opts?.quiet) setLoading(true);
     setError(null);
     try {
       const next = await getMealsInRange(fromKey, toKey);
@@ -143,7 +147,10 @@ export function useMealsRange(fromKey: string, toKey: string) {
     };
   }, [refresh]);
 
-  useEffect(() => subscribeMealsChanged(() => void refresh()), [refresh]);
+  useEffect(
+    () => subscribeMealsChanged(() => void refresh({ quiet: true })),
+    [refresh],
+  )
 
   const caloriesByDay = meals.reduce<Record<string, number>>((acc, meal) => {
     if (meal.status !== "logged") return acc;

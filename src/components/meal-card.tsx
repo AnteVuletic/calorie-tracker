@@ -73,7 +73,7 @@ export function MealCard({
   onRescan?: (id: string) => void;
   onUpdatePortion?: (id: string, portionRaw: string) => Promise<void>;
 }) {
-  const url = useObjectUrl(meal.imageBlob);
+  const url = useObjectUrl(meal.imageBlob, meal.id);
   const isQueued =
     meal.status === "pending" || meal.status === "processing";
   const isFailed = meal.status === "fail";
