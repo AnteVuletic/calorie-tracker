@@ -3,12 +3,15 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
+import { installAppHeight } from "./lib/app-height";
 import { requestPersistentStorage } from "./lib/db";
 import {
   bindPwaUpdateHandler,
   notifyPwaUpdateAvailable,
 } from "./lib/pwa-update";
 import "./index.css";
+
+installAppHeight();
 
 // Persist storage early so meal blobs are not evicted when a new SW precaches.
 void requestPersistentStorage();

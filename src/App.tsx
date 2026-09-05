@@ -77,7 +77,7 @@ export default function App() {
 
   return (
     <div
-      className="app-shell bg-background fixed inset-0 flex flex-col"
+      className="app-shell bg-background flex flex-col"
       style={{
         backgroundImage:
           "radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 18%, transparent), transparent 60%)",
