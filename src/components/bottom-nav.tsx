@@ -15,10 +15,7 @@ const links: {
 
 export function BottomNav() {
   return (
-    <nav
-      className="bg-background/95 border-border z-40 shrink-0 border-t backdrop-blur"
-      style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
-    >
+    <nav className="bottom-nav bg-background/95 border-border z-40 shrink-0 border-t backdrop-blur">
       <div className="mx-auto flex max-w-lg items-stretch justify-around px-2 pt-2">
         {links.map(({ to, label, icon: Icon, end }) => (
           <NavLink

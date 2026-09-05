@@ -77,15 +77,14 @@ export default function App() {
 
   return (
     <div
-      className="bg-background flex h-dvh flex-col"
+      className="app-shell bg-background fixed inset-0 flex flex-col"
       style={{
-        paddingTop: "env(safe-area-inset-top)",
         backgroundImage:
           "radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 18%, transparent), transparent 60%)",
       }}
     >
       <PwaUpdateBanner />
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <ErrorBoundary>
           <Routes>
             <Route path="/" element={<TodayPage />} />
