@@ -58,6 +58,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const [labelTab, setLabelTab] = useState<LabelSourceTab>("new");
   const [blob, setBlob] = useState<Blob | null>(null);
   const [portionRaw, setPortionRaw] = useState("");
+  const [extraContext, setExtraContext] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [previousLoading, setPreviousLoading] = useState(false);
@@ -87,6 +88,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     setLabelTab("new");
     setBlob(null);
     setPortionRaw("");
+    setExtraContext("");
     setBusy(false);
     setPreviousLoading(false);
     setPreviousEntries([]);
@@ -104,6 +106,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     bumpGeneration();
     setBlob(null);
     setPortionRaw("");
+    setExtraContext("");
   };
 
   useEffect(() => {
@@ -159,6 +162,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     imageBlob: Blob,
     scanMode: ScanMode,
     portion?: string,
+    context?: string,
   ) => {
     if (scanMode === "label" && !parsePortionInput(portion ?? "")) {
       toast.error('Enter grams or a portion like "1 teaspoon"');
@@ -175,6 +179,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
 
     try {
       setBusy(true);
+      const trimmedContext = context?.trim();
       await onSaved({
         imageBlob,
         label: "Pending scan…",
@@ -185,6 +190,8 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
         status: "pending",
         scanMode,
         portionRaw: scanMode === "label" ? portion?.trim() : undefined,
+        extraContext:
+          scanMode === "meal" && trimmedContext ? trimmedContext : undefined,
         retryCount: 0,
         nextAttemptAt: undefined,
       });
@@ -216,7 +223,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
       return;
     }
     if (!blob || !mode) return;
-    await queueLabelOrMeal(blob, mode, portionRaw);
+    await queueLabelOrMeal(blob, mode, portionRaw, extraContext);
   };
 
   const filteredPrevious = filterByFoodQuery(previousEntries, searchQuery);
@@ -246,6 +253,26 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
       <p className="text-muted-foreground text-xs">
         Required. Grams, or a portion like &quot;1 row of chocolate&quot; or
         &quot;one teaspoon&quot;.
+      </p>
+    </div>
+  );
+
+  const renderExtraContextField = () => (
+    <div className="grid gap-2">
+      <Label htmlFor="extra-context">Extra context (optional)</Label>
+      <Input
+        id="extra-context"
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        placeholder="e.g. the meat is veal"
+        value={extraContext}
+        onChange={(e) => setExtraContext(e.target.value)}
+        disabled={busy}
+      />
+      <p className="text-muted-foreground text-xs">
+        Helps the AI with details the photo may not show — e.g. &quot;bowl is
+        500ml&quot; or &quot;the meat is veal&quot;.
       </p>
     </div>
   );
@@ -606,6 +633,8 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
                     No photo yet
                   </div>
                 )}
+
+                {renderExtraContextField()}
               </>
             )}
 
