@@ -76,8 +76,8 @@
     @apply border-border outline-ring/50;
   }
   /*
-   * Height from JS-measured --app-h (see app-height.ts / index.html).
-   * Fallback adds safe-area for iOS standalone where dvh undershoots.
+   * Height comes from JS-measured --app-h (see app-height.ts); the CSS
+   * fallbacks only cover first paint before that script runs.
    */
   html,
   body,
@@ -112,7 +112,7 @@
   }
 
   .bottom-nav {
-    padding-bottom: calc(0.5rem + constant(safe-area-inset-bottom));
     padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(0.5rem + var(--safe-b, env(safe-area-inset-bottom, 0px)));
   }
 }
