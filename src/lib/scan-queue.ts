@@ -2,6 +2,7 @@ import { toast } from "sonner";
 import {
   getEarliestPendingAttemptAt,
   getGeminiApiKey,
+  getMeal,
   getPendingMeals,
   updateMeal,
 } from "@/lib/db";
@@ -14,6 +15,18 @@ import {
   scaleLabelNutrition,
 } from "@/lib/gemini";
 import { MAX_SCAN_RETRIES, type Meal } from "@/lib/types";
+
+/** Re-read bytes into a fresh Blob so FileReader / Gemini always get valid data. */
+async function materializeImageBlob(blob: Blob | undefined): Promise<Blob> {
+  if (!blob || blob.size <= 0) {
+    throw new Error("Meal photo is missing — re-add the photo to scan");
+  }
+  const buffer = await blob.arrayBuffer();
+  if (buffer.byteLength <= 0) {
+    throw new Error("Meal photo is empty — re-add the photo to scan");
+  }
+  return new Blob([buffer], { type: blob.type || "image/jpeg" });
+}
 
 const MEALS_CHANGED = "calorie-tracker:meals-changed";
 const BASE_BACKOFF_MS = 1000;
@@ -156,20 +169,24 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
   notifyMealsChanged();
 
   try {
-    if (meal.scanMode === "label") {
-      const portionRaw = meal.portionRaw?.trim() ?? "";
+    // Fresh IDB read — don't rely on a Blob that may have been stale in memory.
+    const fresh = (await getMeal(meal.id)) ?? meal;
+    const imageBlob = await materializeImageBlob(fresh.imageBlob);
+
+    if (fresh.scanMode === "label") {
+      const portionRaw = fresh.portionRaw?.trim() ?? "";
       const portion = parsePortionInput(portionRaw);
       if (!portion) {
         throw new Error('Enter grams or a portion like "1 teaspoon"');
       }
 
-      const label = await analyzeNutritionLabel(apiKey, meal.imageBlob);
+      const label = await analyzeNutritionLabel(apiKey, imageBlob);
       const grams =
         portion.kind === "grams"
           ? portion.grams
           : await estimatePortionGrams(
               apiKey,
-              meal.imageBlob,
+              imageBlob,
               label.label,
               label.basisGrams,
               portion.text,
@@ -192,8 +209,8 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
     } else {
       const result = await analyzeMealImage(
         apiKey,
-        meal.imageBlob,
-        meal.extraContext,
+        imageBlob,
+        fresh.extraContext,
       );
       await updateMeal(meal.id, {
         status: "logged",

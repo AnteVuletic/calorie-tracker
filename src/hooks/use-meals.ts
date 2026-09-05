@@ -106,19 +106,20 @@ export function useMealsForDay(dayKey: string) {
     },
     rescan: async (id: string) => {
       await markMealPending(id);
-      await refresh();
+      // Quiet: keep cards mounted so blob: object URLs stay valid.
+      await refresh({ quiet: true });
       if (navigator.onLine) {
         void processPendingScans();
       }
     },
     updatePortion: async (id: string, portionRaw: string) => {
       const meal = await updateLabelPortionAndRescan(id, portionRaw);
-      await refresh();
+      await refresh({ quiet: true });
       return meal;
     },
     updateContext: async (id: string, extraContext: string) => {
       const meal = await updateMealContextAndRescan(id, extraContext);
-      await refresh();
+      await refresh({ quiet: true });
       return meal;
     },
   };
@@ -234,21 +235,31 @@ export function useOnlineStatus() {
 /** Migrate IDB + drain pending queue when online / on mount. */
 export function useScanQueue() {
   useEffect(() => {
-    void migrateMeals().catch((err) => console.error(err));
-  }, []);
+    let cancelled = false;
 
-  useEffect(() => {
-    const run = () => {
-      if (navigator.onLine) void processPendingScans();
+    const drain = () => {
+      if (!cancelled && navigator.onLine) void processPendingScans();
     };
-    run();
-    window.addEventListener("online", run);
+
+    // Await migrate before the first drain so stuck "processing" meals
+    // (reset to pending) are not missed by a race on reopen.
+    void (async () => {
+      try {
+        await migrateMeals();
+      } catch (err) {
+        console.error(err);
+      }
+      if (!cancelled) drain();
+    })();
+
+    window.addEventListener("online", drain);
     const onVis = () => {
-      if (document.visibilityState === "visible") run();
+      if (document.visibilityState === "visible") drain();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
-      window.removeEventListener("online", run);
+      cancelled = true;
+      window.removeEventListener("online", drain);
       document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
