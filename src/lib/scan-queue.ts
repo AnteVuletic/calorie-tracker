@@ -99,6 +99,33 @@ export async function updateLabelPortionAndRescan(
   return updated;
 }
 
+/**
+ * Update a meal scan's extra context and re-queue it for analysis.
+ */
+export async function updateMealContextAndRescan(
+  mealId: string,
+  extraContext: string,
+): Promise<Meal> {
+  const trimmed = extraContext.trim();
+  const updated = await updateMeal(mealId, {
+    extraContext: trimmed || undefined,
+    status: "pending",
+    calories: 0,
+    proteinG: 0,
+    carbsG: 0,
+    fatG: 0,
+    lastError: undefined,
+    retryCount: 0,
+    nextAttemptAt: undefined,
+    label: "Pending scan…",
+  });
+  notifyMealsChanged();
+  if (typeof navigator !== "undefined" && navigator.onLine) {
+    void processPendingScans({ silent: true });
+  }
+  return updated;
+}
+
 async function handleFailure(meal: Meal, message: string): Promise<void> {
   const nextRetry = (meal.retryCount ?? 0) + 1;
   if (nextRetry > MAX_SCAN_RETRIES) {
@@ -163,7 +190,11 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
         lastError: undefined,
       });
     } else {
-      const result = await analyzeMealImage(apiKey, meal.imageBlob);
+      const result = await analyzeMealImage(
+        apiKey,
+        meal.imageBlob,
+        meal.extraContext,
+      );
       await updateMeal(meal.id, {
         status: "logged",
         label: result.label,

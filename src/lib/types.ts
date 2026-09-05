@@ -24,6 +24,8 @@ export type Meal = {
   scanMode: ScanMode;
   /** Portion text for label scans (grams or description), required when scanMode is label */
   portionRaw?: string;
+  /** Optional user hints for meal-photo AI (e.g. meat type, bowl size) */
+  extraContext?: string;
   /** Failed attempts so far (used for exponential backoff) */
   retryCount?: number;
   /** ISO time when a pending meal may be attempted again */

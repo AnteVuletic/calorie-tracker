@@ -67,27 +67,41 @@ export function MealCard({
   onDelete,
   onRescan,
   onUpdatePortion,
+  onUpdateContext,
 }: {
   meal: Meal;
   onDelete?: (id: string) => void;
   onRescan?: (id: string) => void;
   onUpdatePortion?: (id: string, portionRaw: string) => Promise<void>;
+  onUpdateContext?: (id: string, extraContext: string) => Promise<void>;
 }) {
   const url = useObjectUrl(meal.imageBlob, meal.id);
   const isQueued =
     meal.status === "pending" || meal.status === "processing";
   const isFailed = meal.status === "fail";
   const isLabel = meal.scanMode === "label";
+  const isMealScan = meal.scanMode === "meal";
   const canEditPortion =
     isLabel && Boolean(onUpdatePortion) && meal.status !== "processing";
+  const canEditContext =
+    isMealScan && Boolean(onUpdateContext) && meal.status !== "processing";
 
   const [portionOpen, setPortionOpen] = useState(false);
   const [portionDraft, setPortionDraft] = useState(meal.portionRaw ?? "");
   const [portionBusy, setPortionBusy] = useState(false);
 
+  const [contextOpen, setContextOpen] = useState(false);
+  const [contextDraft, setContextDraft] = useState(meal.extraContext ?? "");
+  const [contextBusy, setContextBusy] = useState(false);
+
   const openPortionEditor = () => {
     setPortionDraft(meal.portionRaw ?? "");
     setPortionOpen(true);
+  };
+
+  const openContextEditor = () => {
+    setContextDraft(meal.extraContext ?? "");
+    setContextOpen(true);
   };
 
   const savePortion = async () => {
@@ -108,6 +122,22 @@ export function MealCard({
       );
     } finally {
       setPortionBusy(false);
+    }
+  };
+
+  const saveContext = async () => {
+    if (!onUpdateContext) return;
+    try {
+      setContextBusy(true);
+      await onUpdateContext(meal.id, contextDraft.trim());
+      toast.success("Context updated — re-queued for analysis");
+      setContextOpen(false);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not update context",
+      );
+    } finally {
+      setContextBusy(false);
     }
   };
 
@@ -146,9 +176,23 @@ export function MealCard({
                       </button>
                     </>
                   ) : null}
+                  {isMealScan && meal.extraContext ? (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        className="hover:text-foreground max-w-48 truncate underline-offset-2 hover:underline"
+                        onClick={canEditContext ? openContextEditor : undefined}
+                        disabled={!canEditContext}
+                        title={meal.extraContext}
+                      >
+                        {meal.extraContext}
+                      </button>
+                    </>
+                  ) : null}
                 </p>
               </div>
-              {onDelete || onRescan || canEditPortion ? (
+              {onDelete || onRescan || canEditPortion || canEditContext ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -165,6 +209,12 @@ export function MealCard({
                       <DropdownMenuItem onClick={openPortionEditor}>
                         <Pencil className="size-4" />
                         Edit portion
+                      </DropdownMenuItem>
+                    ) : null}
+                    {canEditContext ? (
+                      <DropdownMenuItem onClick={openContextEditor}>
+                        <Pencil className="size-4" />
+                        Edit context
                       </DropdownMenuItem>
                     ) : null}
                     {onRescan ? (
@@ -215,6 +265,17 @@ export function MealCard({
                     >
                       <Pencil className="size-3.5" />
                       Edit portion
+                    </Button>
+                  ) : null}
+                  {canEditContext ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={openContextEditor}
+                    >
+                      <Pencil className="size-3.5" />
+                      Edit context
                     </Button>
                   ) : null}
                   {onRescan ? (
@@ -296,6 +357,63 @@ export function MealCard({
                 disabled={portionBusy || !parsePortionInput(portionDraft)}
               >
                 {portionBusy ? <Loader2 className="animate-spin" /> : null}
+                Save &amp; reanalyze
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      {canEditContext ? (
+        <Dialog open={contextOpen} onOpenChange={setContextOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit context</DialogTitle>
+              <DialogDescription>
+                Add or change hints for the AI. The meal photo will be
+                re-analyzed with the updated context.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-2">
+              <Label htmlFor={`context-${meal.id}`}>
+                Extra context (optional)
+              </Label>
+              <Input
+                id={`context-${meal.id}`}
+                type="text"
+                inputMode="text"
+                autoComplete="off"
+                placeholder="e.g. the meat is veal"
+                value={contextDraft}
+                onChange={(e) => setContextDraft(e.target.value)}
+                disabled={contextBusy}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveContext();
+                  }
+                }}
+              />
+              <p className="text-muted-foreground text-xs">
+                Helps the AI with details the photo may not show — e.g.
+                &quot;bowl is 500ml&quot; or &quot;the meat is veal&quot;.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setContextOpen(false)}
+                disabled={contextBusy}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void saveContext()}
+                disabled={contextBusy}
+              >
+                {contextBusy ? <Loader2 className="animate-spin" /> : null}
                 Save &amp; reanalyze
               </Button>
             </DialogFooter>

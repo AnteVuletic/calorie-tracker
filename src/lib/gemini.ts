@@ -135,11 +135,21 @@ async function runVision(
   return result.response.text();
 }
 
+export function buildMealPrompt(extraContext?: string): string {
+  const hint = extraContext?.trim();
+  if (!hint) return MEAL_PROMPT;
+  return `${MEAL_PROMPT}
+
+User-provided context (use this to resolve ambiguities such as meat type, dish identity, or serving size):
+"${hint}"`;
+}
+
 export async function analyzeMealImage(
   apiKey: string,
   image: Blob,
+  extraContext?: string,
 ): Promise<ScanResult> {
-  const text = await runVision(apiKey, image, MEAL_PROMPT);
+  const text = await runVision(apiKey, image, buildMealPrompt(extraContext));
   return parseScanResult(extractJson(text));
 }
 

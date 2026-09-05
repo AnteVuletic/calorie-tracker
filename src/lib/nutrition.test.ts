@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildMealPrompt,
   extractJson,
   formatPortionSuffix,
   parseLabelScanResult,
@@ -15,6 +16,25 @@ import {
   productNameFromLabel,
 } from "@/lib/food-match";
 import { sumMeals } from "@/lib/types";
+
+describe("buildMealPrompt", () => {
+  it("returns the base prompt when context is missing or blank", () => {
+    const base = buildMealPrompt();
+    expect(base).toContain("nutrition estimator");
+    expect(base).not.toContain("User-provided context");
+    expect(buildMealPrompt("   ")).toBe(base);
+  });
+
+  it("appends trimmed user context for meat / size ambiguities", () => {
+    const prompt = buildMealPrompt("  the meat is veal  ");
+    expect(prompt).toContain("User-provided context");
+    expect(prompt).toContain('"the meat is veal"');
+    expect(prompt).toContain("meat type");
+    expect(prompt.indexOf("User-provided context")).toBeGreaterThan(
+      prompt.indexOf("nutrition estimator"),
+    );
+  });
+});
 
 describe("extractJson", () => {
   it("parses fenced json", () => {

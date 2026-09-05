@@ -21,6 +21,7 @@ import {
   processPendingScans,
   subscribeMealsChanged,
   updateLabelPortionAndRescan,
+  updateMealContextAndRescan,
 } from "@/lib/scan-queue";
 
 export function useLocalDayKey() {
@@ -112,6 +113,11 @@ export function useMealsForDay(dayKey: string) {
     },
     updatePortion: async (id: string, portionRaw: string) => {
       const meal = await updateLabelPortionAndRescan(id, portionRaw);
+      await refresh();
+      return meal;
+    },
+    updateContext: async (id: string, extraContext: string) => {
+      const meal = await updateMealContextAndRescan(id, extraContext);
       await refresh();
       return meal;
     },

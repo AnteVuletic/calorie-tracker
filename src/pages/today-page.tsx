@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export function TodayPage() {
   const dayKey = useLocalDayKey();
-  const { meals, loading, error, totals, create, remove, rescan, updatePortion } =
+  const { meals, loading, error, totals, create, remove, rescan, updatePortion, updateContext } =
     useMealsForDay(dayKey);
   const [open, setOpen] = useState(false);
 
@@ -55,6 +55,9 @@ export function TodayPage() {
               onRescan={(id) => void rescan(id)}
               onUpdatePortion={(id, portionRaw) =>
                 updatePortion(id, portionRaw).then(() => undefined)
+              }
+              onUpdateContext={(id, extraContext) =>
+                updateContext(id, extraContext).then(() => undefined)
               }
             />
           ))

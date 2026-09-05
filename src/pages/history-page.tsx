@@ -256,6 +256,11 @@ export function HistoryPage() {
                   .updatePortion(id, portionRaw)
                   .then(() => refreshRange())
               }
+              onUpdateContext={(id, extraContext) =>
+                dayState
+                  .updateContext(id, extraContext)
+                  .then(() => refreshRange())
+              }
             />
           ))
         )}
