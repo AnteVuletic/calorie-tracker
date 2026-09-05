@@ -5,7 +5,6 @@ import { useLocalDayKey, useMealsForDay } from "@/hooks/use-meals";
 import { MacroSummary } from "@/components/macro-summary";
 import { MealCard } from "@/components/meal-card";
 import { AddMealDialog } from "@/components/add-meal-dialog";
-import { IosInstallHint } from "@/components/ios-install-hint";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -29,8 +28,6 @@ export function TodayPage() {
           Add
         </Button>
       </header>
-
-      <IosInstallHint />
 
       <MacroSummary totals={totals} />
 
