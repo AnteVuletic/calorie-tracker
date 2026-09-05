@@ -131,19 +131,27 @@ export async function migrateMeals(): Promise<void> {
     };
     const nextStatus = normalizeStatus(value.status);
     const nextMode = value.scanMode ?? "meal";
-    // Stuck processing from a crashed tab should re-enter the queue.
-    const resetProcessing =
-      nextStatus === "processing" ? ("pending" as const) : nextStatus;
+    // Stuck processing (crashed tab) or terminal fail should re-enter the queue
+    // on reopen so a valid stored photo is scanned again without re-upload.
+    const resetQueue =
+      nextStatus === "processing" || nextStatus === "fail"
+        ? ("pending" as const)
+        : nextStatus;
+    const shouldResetRetries = resetQueue === "pending" && nextStatus !== "pending";
     if (
-      value.status !== resetProcessing ||
+      value.status !== resetQueue ||
       value.scanMode !== nextMode ||
       !value.status ||
-      !value.scanMode
+      !value.scanMode ||
+      (shouldResetRetries && (value.retryCount || value.nextAttemptAt))
     ) {
       await cursor.update({
         ...value,
-        status: resetProcessing,
+        status: resetQueue,
         scanMode: nextMode,
+        ...(shouldResetRetries
+          ? { retryCount: 0, nextAttemptAt: undefined }
+          : {}),
       });
     }
     cursor = await cursor.continue();
