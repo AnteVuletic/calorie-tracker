@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import { retentionCutoff, toDayKey } from "@/lib/dates";
+import { toDayKey } from "@/lib/dates";
 import type { Meal, MealStatus, ScanMode } from "@/lib/types";
 
 interface CalorieDB extends DBSchema {
@@ -15,15 +15,34 @@ interface CalorieDB extends DBSchema {
 }
 
 const DB_NAME = "calorie-tracker";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<CalorieDB>> | null = null;
+
+/** Map legacy "scanned" (and missing) statuses onto the current set. */
+function normalizeStatus(
+  status: MealStatus | "scanned" | undefined,
+): MealStatus {
+  if (status === "scanned") return "logged";
+  if (
+    status === "pending" ||
+    status === "processing" ||
+    status === "logged" ||
+    status === "fail"
+  ) {
+    return status;
+  }
+  return "logged";
+}
 
 function normalizeMeal(raw: Meal): Meal {
   return {
     ...raw,
-    status: raw.status ?? "logged",
+    status: normalizeStatus(raw.status as MealStatus | "scanned" | undefined),
     scanMode: raw.scanMode ?? "meal",
+    portionRaw: raw.portionRaw,
+    retryCount: raw.retryCount,
+    nextAttemptAt: raw.nextAttemptAt,
     lastError: raw.lastError,
   };
 }
@@ -41,13 +60,13 @@ function getDb() {
           let cursor = await store.openCursor();
           while (cursor) {
             const value = cursor.value as Meal & {
-              status?: MealStatus;
+              status?: MealStatus | "scanned";
               scanMode?: ScanMode;
             };
             if (!value.status || !value.scanMode) {
               await cursor.update({
                 ...value,
-                status: value.status ?? "logged",
+                status: normalizeStatus(value.status),
                 scanMode: value.scanMode ?? "meal",
               });
             }
@@ -57,51 +76,78 @@ function getDb() {
             store.createIndex("by-status", "status");
           }
         }
+        if (oldVersion < 3 && db.objectStoreNames.contains("meals")) {
+          const store = transaction.objectStore("meals");
+          let cursor = await store.openCursor();
+          while (cursor) {
+            const value = cursor.value as Meal & {
+              status?: MealStatus | "scanned";
+            };
+            const nextStatus = normalizeStatus(value.status);
+            if (value.status !== nextStatus) {
+              await cursor.update({ ...value, status: nextStatus });
+            }
+            cursor = await cursor.continue();
+          }
+        }
         if (!db.objectStoreNames.contains("settings")) {
           db.createObjectStore("settings", { keyPath: "key" });
         }
       },
-    });
+      blocked() {
+        dbPromise = null;
+      },
+      terminated() {
+        dbPromise = null;
+      },
+    })
+      .then((db) => {
+        // Close on versionchange so upgrades during app update aren't blocked;
+        // IndexedDB data is preserved and the next getDb() reopens.
+        db.addEventListener("versionchange", () => {
+          db.close();
+          dbPromise = null;
+        });
+        return db;
+      })
+      .catch((err) => {
+        dbPromise = null;
+        throw err;
+      });
   }
   return dbPromise;
 }
 
-/** Backfill status/scanMode on existing rows after upgrade. */
+/** Backfill status/scanMode and migrate legacy scanned → logged. */
 export async function migrateMeals(): Promise<void> {
   const db = await getDb();
   const tx = db.transaction("meals", "readwrite");
   let cursor = await tx.store.openCursor();
   while (cursor) {
     const value = cursor.value as Meal & {
-      status?: MealStatus;
+      status?: MealStatus | "scanned";
       scanMode?: ScanMode;
     };
-    if (!value.status || !value.scanMode) {
+    const nextStatus = normalizeStatus(value.status);
+    const nextMode = value.scanMode ?? "meal";
+    // Stuck processing from a crashed tab should re-enter the queue.
+    const resetProcessing =
+      nextStatus === "processing" ? ("pending" as const) : nextStatus;
+    if (
+      value.status !== resetProcessing ||
+      value.scanMode !== nextMode ||
+      !value.status ||
+      !value.scanMode
+    ) {
       await cursor.update({
         ...value,
-        status: value.status ?? "logged",
-        scanMode: value.scanMode ?? "meal",
+        status: resetProcessing,
+        scanMode: nextMode,
       });
     }
     cursor = await cursor.continue();
   }
   await tx.done;
-}
-
-export async function purgeOldMeals(now = new Date()): Promise<number> {
-  const db = await getDb();
-  const cutoffKey = toDayKey(retentionCutoff(now));
-  const tx = db.transaction("meals", "readwrite");
-  const index = tx.store.index("by-day");
-  let deleted = 0;
-  let cursor = await index.openCursor(IDBKeyRange.upperBound(cutoffKey, true));
-  while (cursor) {
-    await cursor.delete();
-    deleted += 1;
-    cursor = await cursor.continue();
-  }
-  await tx.done;
-  return deleted;
 }
 
 export type NewMealInput = Omit<Meal, "id" | "createdAt" | "dayKey">;
@@ -121,6 +167,9 @@ export async function addMeal(meal: NewMealInput): Promise<Meal> {
     fatG: meal.fatG,
     status: meal.status,
     scanMode: meal.scanMode,
+    portionRaw: meal.portionRaw,
+    retryCount: meal.retryCount,
+    nextAttemptAt: meal.nextAttemptAt,
     lastError: meal.lastError,
   };
   try {
@@ -191,12 +240,49 @@ export async function getMealsInRange(
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function getPendingMeals(): Promise<Meal[]> {
+/** Logged nutrition-label meals (newest first). */
+export async function getLoggedLabelMeals(): Promise<Meal[]> {
   const db = await getDb();
-  const meals = await db.getAllFromIndex("meals", "by-status", "pending");
+  const meals = await db.getAll("meals");
   return meals
     .map(normalizeMeal)
+    .filter((meal) => meal.scanMode === "label" && meal.status === "logged")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Pending meals ready to process (backoff elapsed), oldest first. */
+export async function getPendingMeals(now = new Date()): Promise<Meal[]> {
+  const db = await getDb();
+  const meals = await db.getAllFromIndex("meals", "by-status", "pending");
+  const nowMs = now.getTime();
+  return meals
+    .map(normalizeMeal)
+    .filter((meal) => {
+      if (!meal.nextAttemptAt) return true;
+      const at = Date.parse(meal.nextAttemptAt);
+      return !Number.isFinite(at) || at <= nowMs;
+    })
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** Earliest nextAttemptAt among pending meals that are still waiting on backoff. */
+export async function getEarliestPendingAttemptAt(): Promise<string | null> {
+  const db = await getDb();
+  const meals = await db.getAllFromIndex("meals", "by-status", "pending");
+  let earliest: string | null = null;
+  let earliestMs = Infinity;
+  const nowMs = Date.now();
+  for (const raw of meals) {
+    const meal = normalizeMeal(raw);
+    if (!meal.nextAttemptAt) continue;
+    const at = Date.parse(meal.nextAttemptAt);
+    if (!Number.isFinite(at) || at <= nowMs) continue;
+    if (at < earliestMs) {
+      earliestMs = at;
+      earliest = meal.nextAttemptAt;
+    }
+  }
+  return earliest;
 }
 
 export async function clearAllMeals(): Promise<void> {

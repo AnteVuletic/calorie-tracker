@@ -6,18 +6,14 @@ import {
   startOfWeek,
   endOfWeek,
   addWeeks,
-  subWeeks,
 } from "date-fns";
 import {
   toDayKey,
   weekDayKeys,
   formatDisplayDate,
-  isWithinRetention,
-  retentionCutoff,
-  retentionFromKey,
-  clampDateToRetention,
+  isNotFuture,
+  clampToToday,
   parseDayKey,
-  RETENTION_DAYS,
 } from "@/lib/dates";
 import { useMealsForDay, useMealsRange } from "@/hooks/use-meals";
 import { MacroSummary } from "@/components/macro-summary";
@@ -33,18 +29,13 @@ type ViewMode = "month" | "week" | "day";
 
 export function HistoryPage() {
   const today = new Date();
-  const [selected, setSelected] = useState<Date>(() =>
-    clampDateToRetention(today, today),
-  );
+  const todayKey = toDayKey(today);
+  const [selected, setSelected] = useState<Date>(() => clampToToday(today, today));
   const [displayMonth, setDisplayMonth] = useState<Date>(() =>
     startOfMonth(today),
   );
   const [mode, setMode] = useState<ViewMode>("month");
   const selectedKey = toDayKey(selected);
-  const retentionFrom = retentionFromKey(today);
-  const retentionTo = toDayKey(today);
-  const startMonth = retentionCutoff(today);
-  const endMonth = today;
 
   const range = useMemo(() => {
     if (mode === "week") {
@@ -62,12 +53,12 @@ export function HistoryPage() {
     return { from: selectedKey, to: selectedKey };
   }, [mode, selected, selectedKey, displayMonth]);
 
-  const clampedFrom = range.from < retentionFrom ? retentionFrom : range.from;
-  const clampedTo = range.to > retentionTo ? retentionTo : range.to;
-  const wasClamped = clampedFrom !== range.from || clampedTo !== range.to;
+  // Don't query future days within the current week/month.
+  const clampedTo = range.to > todayKey ? todayKey : range.to;
+  const wasClamped = clampedTo !== range.to;
 
   const { caloriesByDay, loading: rangeLoading, totals: rangeTotals, refresh: refreshRange } =
-    useMealsRange(clampedFrom, clampedTo);
+    useMealsRange(range.from, clampedTo);
 
   const dayState = useMealsForDay(selectedKey);
   const weekKeys = weekDayKeys(selected);
@@ -77,14 +68,14 @@ export function HistoryPage() {
       ? formatDisplayDate(selectedKey)
       : mode === "week"
         ? wasClamped
-          ? `${format(parseDayKey(clampedFrom), "MMM d")} – ${format(parseDayKey(clampedTo), "MMM d")}`
+          ? `${format(parseDayKey(range.from), "MMM d")} – ${format(parseDayKey(clampedTo), "MMM d")}`
           : `Week of ${format(startOfWeek(selected, { weekStartsOn: 1 }), "MMM d")}`
         : wasClamped
-          ? `${format(parseDayKey(clampedFrom), "MMM d")} – ${format(parseDayKey(clampedTo), "MMM d")}`
+          ? `${format(parseDayKey(range.from), "MMM d")} – ${format(parseDayKey(clampedTo), "MMM d")}`
           : format(displayMonth, "MMMM yyyy");
 
   const selectDay = (date: Date) => {
-    const next = clampDateToRetention(date, today);
+    const next = clampToToday(date, today);
     setSelected(next);
     setDisplayMonth(startOfMonth(next));
   };
@@ -97,9 +88,7 @@ export function HistoryPage() {
     <div className="mx-auto flex w-full max-w-lg flex-col gap-4 px-4 pb-28 pt-4">
       <header>
         <p className="text-muted-foreground text-sm">History</p>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Past {RETENTION_DAYS} days
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">All meals</h1>
       </header>
 
       <Tabs value={mode} onValueChange={(v) => setMode(v as ViewMode)}>
@@ -124,12 +113,11 @@ export function HistoryPage() {
             selected={selected}
             month={displayMonth}
             onMonthChange={(m) =>
-              setDisplayMonth(startOfMonth(clampDateToRetention(m, today)))
+              setDisplayMonth(startOfMonth(clampToToday(m, today)))
             }
             onSelect={(d) => d && selectDay(d)}
-            startMonth={startMonth}
-            endMonth={endMonth}
-            disabled={(date) => !isWithinRetention(toDayKey(date), today)}
+            endMonth={today}
+            disabled={(date) => !isNotFuture(toDayKey(date), today)}
             modifiers={
               mode === "month"
                 ? {
@@ -175,12 +163,6 @@ export function HistoryPage() {
               size="icon"
               className="size-8"
               onClick={() => shiftWeek(-1)}
-              disabled={
-                !isWithinRetention(
-                  toDayKey(startOfWeek(subWeeks(selected, 1), { weekStartsOn: 1 })),
-                  today,
-                )
-              }
             >
               <ChevronLeft className="size-4" />
             </Button>
@@ -193,7 +175,7 @@ export function HistoryPage() {
               onClick={() => shiftWeek(1)}
               disabled={
                 toDayKey(startOfWeek(addWeeks(selected, 1), { weekStartsOn: 1 })) >
-                retentionTo
+                todayKey
               }
             >
               <ChevronRight className="size-4" />
@@ -202,17 +184,17 @@ export function HistoryPage() {
           <div className="grid grid-cols-7 gap-1">
             {weekKeys.map((key) => {
               const active = key === selectedKey;
-              const retained = isWithinRetention(key, today);
+              const selectable = isNotFuture(key, today);
               return (
                 <button
                   key={key}
                   type="button"
-                  disabled={!retained}
+                  disabled={!selectable}
                   onClick={() => selectDay(parseDayKey(key))}
                   className={cn(
                     "rounded-lg border p-2 text-center text-xs",
                     active && "border-primary bg-secondary",
-                    !retained && "opacity-40",
+                    !selectable && "opacity-40",
                   )}
                 >
                   <div className="text-muted-foreground">
@@ -235,7 +217,7 @@ export function HistoryPage() {
 
       {wasClamped && mode !== "day" ? (
         <p className="text-muted-foreground text-xs">
-          Partial period — limited to the {RETENTION_DAYS}-day retention window.
+          Partial period — totals include only days through today.
         </p>
       ) : null}
 
@@ -268,6 +250,11 @@ export function HistoryPage() {
               }
               onRescan={(id) =>
                 void dayState.rescan(id).then(() => refreshRange())
+              }
+              onUpdatePortion={(id, portionRaw) =>
+                dayState
+                  .updatePortion(id, portionRaw)
+                  .then(() => refreshRange())
               }
             />
           ))

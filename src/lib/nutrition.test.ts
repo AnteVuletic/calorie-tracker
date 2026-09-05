@@ -9,12 +9,12 @@ import {
   scaleLabelNutrition,
 } from "@/lib/gemini";
 import {
-  isWithinRetention,
-  retentionCutoff,
-  toDayKey,
-} from "@/lib/dates";
-import { RETENTION_DAYS, sumMeals } from "@/lib/types";
-import { subDays, startOfDay } from "date-fns";
+  dedupeBySimilarName,
+  filterByFoodQuery,
+  nameSimilarity,
+  productNameFromLabel,
+} from "@/lib/food-match";
+import { sumMeals } from "@/lib/types";
 
 describe("extractJson", () => {
   it("parses fenced json", () => {
@@ -178,7 +178,7 @@ describe("parsePortionGramsResult + formatPortionSuffix", () => {
 });
 
 describe("sumMeals", () => {
-  it("excludes pending meals from totals", () => {
+  it("only counts logged meals in totals", () => {
     expect(
       sumMeals([
         {
@@ -196,7 +196,21 @@ describe("sumMeals", () => {
           fatG: 0,
         },
         {
-          status: "scanned",
+          status: "processing",
+          calories: 0,
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+        },
+        {
+          status: "fail",
+          calories: 0,
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+        },
+        {
+          status: "logged",
           calories: 200,
           proteinG: 20,
           carbsG: 20,
@@ -212,17 +226,62 @@ describe("sumMeals", () => {
   });
 });
 
-describe("retention", () => {
-  it("keeps an inclusive RETENTION_DAYS window", () => {
-    const now = new Date("2026-09-04T15:00:00");
-    const cutoff = retentionCutoff(now);
-    expect(toDayKey(cutoff)).toBe(
-      toDayKey(startOfDay(subDays(now, RETENTION_DAYS - 1))),
+describe("food-match", () => {
+  it("strips portion suffixes from labels", () => {
+    expect(productNameFromLabel("Protein Bar (40g)")).toBe("Protein Bar");
+    expect(productNameFromLabel("Dark Chocolate (1 row · ~12g)")).toBe(
+      "Dark Chocolate",
     );
-    expect(isWithinRetention(toDayKey(cutoff), now)).toBe(true);
-    expect(
-      isWithinRetention(toDayKey(subDays(cutoff, 1)), now),
-    ).toBe(false);
-    expect(isWithinRetention(toDayKey(now), now)).toBe(true);
+    expect(productNameFromLabel("Soup")).toBe("Soup");
+  });
+
+  it("scores near-identical names highly", () => {
+    expect(nameSimilarity("Greek Yogurt", "greek yoghurt")).toBeGreaterThan(
+      0.8,
+    );
+    expect(nameSimilarity("Oat Milk", "Almond Milk")).toBeLessThan(0.8);
+  });
+
+  it("dedupes entries when names match at least 80%", () => {
+    const kept = dedupeBySimilarName([
+      {
+        id: "1",
+        createdAt: "2026-09-01T10:00:00.000Z",
+        label: "Choco Bar (40g)",
+      },
+      {
+        id: "2",
+        createdAt: "2026-09-03T10:00:00.000Z",
+        label: "Choco Bar (80g)",
+      },
+      {
+        id: "3",
+        createdAt: "2026-09-02T10:00:00.000Z",
+        label: "Greek Yogurt (150g)",
+      },
+    ]);
+    expect(kept.map((e) => e.id)).toEqual(["2", "3"]);
+  });
+
+  it("filters previous entries by search query", () => {
+    const entries = [
+      {
+        id: "1",
+        createdAt: "2026-09-01T10:00:00.000Z",
+        label: "Almond Butter (20g)",
+      },
+      {
+        id: "2",
+        createdAt: "2026-09-02T10:00:00.000Z",
+        label: "Peanut Butter (30g)",
+      },
+    ];
+    expect(filterByFoodQuery(entries, "almond").map((e) => e.id)).toEqual([
+      "1",
+    ]);
+    expect(filterByFoodQuery(entries, "").map((e) => e.id)).toEqual([
+      "1",
+      "2",
+    ]);
   });
 });

@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export function TodayPage() {
   const dayKey = useLocalDayKey();
-  const { meals, loading, error, totals, create, remove, rescan } =
+  const { meals, loading, error, totals, create, remove, rescan, updatePortion } =
     useMealsForDay(dayKey);
   const [open, setOpen] = useState(false);
 
@@ -56,6 +56,9 @@ export function TodayPage() {
               meal={meal}
               onDelete={(id) => void remove(id)}
               onRescan={(id) => void rescan(id)}
+              onUpdatePortion={(id, portionRaw) =>
+                updatePortion(id, portionRaw).then(() => undefined)
+              }
             />
           ))
         )}

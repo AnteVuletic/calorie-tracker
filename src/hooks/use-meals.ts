@@ -20,6 +20,7 @@ import {
   markMealPending,
   processPendingScans,
   subscribeMealsChanged,
+  updateLabelPortionAndRescan,
 } from "@/lib/scan-queue";
 
 export function useLocalDayKey() {
@@ -105,6 +106,11 @@ export function useMealsForDay(dayKey: string) {
         void processPendingScans();
       }
     },
+    updatePortion: async (id: string, portionRaw: string) => {
+      const meal = await updateLabelPortionAndRescan(id, portionRaw);
+      await refresh();
+      return meal;
+    },
   };
 }
 
@@ -140,7 +146,7 @@ export function useMealsRange(fromKey: string, toKey: string) {
   useEffect(() => subscribeMealsChanged(() => void refresh()), [refresh]);
 
   const caloriesByDay = meals.reduce<Record<string, number>>((acc, meal) => {
-    if (meal.status !== "scanned" && meal.status !== "logged") return acc;
+    if (meal.status !== "logged") return acc;
     acc[meal.dayKey] = (acc[meal.dayKey] ?? 0) + meal.calories;
     return acc;
   }, {});

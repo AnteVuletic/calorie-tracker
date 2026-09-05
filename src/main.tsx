@@ -4,17 +4,24 @@ import { BrowserRouter } from "react-router-dom";
 import { registerSW } from "virtual:pwa-register";
 import { toast } from "sonner";
 import App from "./App";
+import { requestPersistentStorage } from "./lib/db";
 import "./index.css";
 
-registerSW({
+// Persist storage early so meal blobs are not evicted when a new SW precaches.
+void requestPersistentStorage();
+
+const updateSW = registerSW({
   immediate: true,
   onNeedRefresh() {
     toast.message("Update available", {
-      description: "Reload to get the latest app shell.",
+      description:
+        "Reload to get the latest app shell. Your meals stay on this device.",
       duration: Infinity,
       action: {
         label: "Reload",
-        onClick: () => window.location.reload(),
+        onClick: () => {
+          void updateSW(true);
+        },
       },
     });
   },

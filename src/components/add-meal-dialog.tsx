@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -6,6 +6,7 @@ import {
   ClipboardList,
   ImagePlus,
   Loader2,
+  Search,
   Utensils,
   WifiOff,
 } from "lucide-react";
@@ -22,25 +23,22 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useObjectUrl } from "@/hooks/use-object-url";
 import { useOnlineStatus } from "@/hooks/use-meals";
-import {
-  analyzeMealImage,
-  analyzeNutritionLabel,
-  estimatePortionGrams,
-  formatPortionSuffix,
-  parsePortionInput,
-  scaleLabelNutrition,
-  type LabelScanResult,
-  type PortionInput,
-  type ScanMode,
-  type ScanResult,
-} from "@/lib/gemini";
+import { parsePortionInput, type ScanMode } from "@/lib/gemini";
 import { compressImage, compressOptionsForMode } from "@/lib/image";
-import { getGeminiApiKey } from "@/lib/db";
-import { roundMacro } from "@/lib/dates";
+import { getGeminiApiKey, getLoggedLabelMeals } from "@/lib/db";
 import type { NewMealInput } from "@/lib/db";
 import { processPendingScans } from "@/lib/scan-queue";
+import {
+  dedupeBySimilarName,
+  filterByFoodQuery,
+  productNameFromLabel,
+} from "@/lib/food-match";
+import type { Meal } from "@/lib/types";
+import { formatMacro } from "@/lib/dates";
+import { cn } from "@/lib/utils";
 
 type Props = {
   open: boolean;
@@ -48,40 +46,7 @@ type Props = {
   onSaved: (result: NewMealInput) => Promise<void>;
 };
 
-type EditableMacros = {
-  label: string;
-  calories: string;
-  proteinG: string;
-  carbsG: string;
-  fatG: string;
-};
-
-function toEditable(scan: ScanResult): EditableMacros {
-  return {
-    label: scan.label,
-    calories: String(Math.round(scan.calories)),
-    proteinG: String(roundMacro(scan.proteinG)),
-    carbsG: String(roundMacro(scan.carbsG)),
-    fatG: String(roundMacro(scan.fatG)),
-  };
-}
-
-function fromEditable(edit: EditableMacros): ScanResult | null {
-  const calories = Number(edit.calories);
-  const proteinG = Number(edit.proteinG);
-  const carbsG = Number(edit.carbsG);
-  const fatG = Number(edit.fatG);
-  if (![calories, proteinG, carbsG, fatG].every((n) => Number.isFinite(n))) {
-    return null;
-  }
-  return {
-    label: edit.label.trim() || "Meal",
-    calories: Math.max(0, Math.round(calories)),
-    proteinG: Math.max(0, roundMacro(proteinG)),
-    carbsG: Math.max(0, roundMacro(carbsG)),
-    fatG: Math.max(0, roundMacro(fatG)),
-  };
-}
+type LabelSourceTab = "new" | "previous";
 
 export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -90,35 +55,27 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const online = useOnlineStatus();
 
   const [mode, setMode] = useState<ScanMode | null>(null);
+  const [labelTab, setLabelTab] = useState<LabelSourceTab>("new");
   const [blob, setBlob] = useState<Blob | null>(null);
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const [labelScan, setLabelScan] = useState<LabelScanResult | null>(null);
-  const [edit, setEdit] = useState<EditableMacros | null>(null);
   const [portionRaw, setPortionRaw] = useState("");
-  const [resolvedGrams, setResolvedGrams] = useState<number | null>(null);
-  const [resolvedPortion, setResolvedPortion] = useState<PortionInput | null>(
-    null,
-  );
   const [busy, setBusy] = useState(false);
+
+  const [previousLoading, setPreviousLoading] = useState(false);
+  const [previousEntries, setPreviousEntries] = useState<Meal[]>([]);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedPrevious, setSelectedPrevious] = useState<Meal | null>(null);
+
   const previewUrl = useObjectUrl(blob);
+  const selectedPreviewUrl = useObjectUrl(selectedPrevious?.imageBlob ?? null);
 
   const portionParsed = parsePortionInput(portionRaw);
-  const scaledLabel =
-    labelScan && resolvedGrams != null
-      ? scaleLabelNutrition(labelScan, resolvedGrams)
-      : null;
-  const needsPortionEstimate = portionParsed?.kind === "description";
-  const portionReady =
-    resolvedGrams != null &&
-    resolvedPortion != null &&
-    ((portionParsed?.kind === "grams" &&
-      resolvedPortion.kind === "grams" &&
-      resolvedPortion.grams === portionParsed.grams) ||
-      (portionParsed?.kind === "description" &&
-        resolvedPortion.kind === "description" &&
-        resolvedPortion.text === portionParsed.text));
-
-  const hasScanResult = Boolean(scan || labelScan);
+  const canAnalyzeNew =
+    Boolean(blob) &&
+    !busy &&
+    (mode === "meal" || (mode === "label" && Boolean(portionParsed)));
+  const canAnalyzePrevious =
+    Boolean(selectedPrevious) && !busy && Boolean(portionParsed);
 
   const bumpGeneration = () => {
     requestGen.current += 1;
@@ -127,14 +84,15 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const reset = () => {
     bumpGeneration();
     setMode(null);
+    setLabelTab("new");
     setBlob(null);
-    setScan(null);
-    setLabelScan(null);
-    setEdit(null);
     setPortionRaw("");
-    setResolvedGrams(null);
-    setResolvedPortion(null);
     setBusy(false);
+    setPreviousLoading(false);
+    setPreviousEntries([]);
+    setSearchDraft("");
+    setSearchQuery("");
+    setSelectedPrevious(null);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -145,25 +103,38 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const clearPhoto = () => {
     bumpGeneration();
     setBlob(null);
-    setScan(null);
-    setLabelScan(null);
-    setEdit(null);
     setPortionRaw("");
-    setResolvedGrams(null);
-    setResolvedPortion(null);
   };
+
+  useEffect(() => {
+    if (!open || mode !== "label" || labelTab !== "previous") return;
+    let cancelled = false;
+    setPreviousLoading(true);
+    void getLoggedLabelMeals()
+      .then((meals) => {
+        if (cancelled) return;
+        setPreviousEntries(dedupeBySimilarName(meals));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        toast.error(
+          err instanceof Error ? err.message : "Could not load previous labels",
+        );
+        setPreviousEntries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviousLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, labelTab]);
 
   const onFile = async (file: File | undefined) => {
     if (!file || !mode) return;
     const gen = ++requestGen.current;
     try {
       setBusy(true);
-      setScan(null);
-      setLabelScan(null);
-      setEdit(null);
-      setPortionRaw("");
-      setResolvedGrams(null);
-      setResolvedPortion(null);
       const compressed = await compressImage(
         file,
         compressOptionsForMode(mode),
@@ -184,24 +155,42 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     void onFile(file);
   };
 
-  const savePending = async (errorMessage?: string) => {
-    if (!blob || !mode) return;
+  const queueLabelOrMeal = async (
+    imageBlob: Blob,
+    scanMode: ScanMode,
+    portion?: string,
+  ) => {
+    if (scanMode === "label" && !parsePortionInput(portion ?? "")) {
+      toast.error('Enter grams or a portion like "1 teaspoon"');
+      return;
+    }
+
+    if (online) {
+      const apiKey = await getGeminiApiKey();
+      if (!apiKey?.trim()) {
+        toast.error("Add your Gemini API key in Settings");
+        return;
+      }
+    }
+
     try {
       setBusy(true);
       await onSaved({
-        imageBlob: blob,
+        imageBlob,
         label: "Pending scan…",
         calories: 0,
         proteinG: 0,
         carbsG: 0,
         fatG: 0,
         status: "pending",
-        scanMode: mode,
-        lastError: errorMessage,
+        scanMode,
+        portionRaw: scanMode === "label" ? portion?.trim() : undefined,
+        retryCount: 0,
+        nextAttemptAt: undefined,
       });
       toast.success(
         online
-          ? "Saved as pending — will retry scan shortly"
+          ? "Queued for analysis"
           : "Saved offline — will scan when you're back online",
       );
       handleOpenChange(false);
@@ -209,199 +198,243 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
         void processPendingScans({ silent: true });
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save meal");
+      toast.error(err instanceof Error ? err.message : "Could not queue meal");
     } finally {
       setBusy(false);
     }
   };
 
+  /** Queue the scan as pending; Gemini runs in the background queue. */
   const analyze = async () => {
-    if (!blob || !mode) return;
-    if (!online) {
-      await savePending();
-      return;
-    }
-    const gen = ++requestGen.current;
-    setBusy(true);
-    try {
-      const apiKey = await getGeminiApiKey();
-      if (gen !== requestGen.current) return;
-      if (!apiKey) {
-        toast.error("Add your Gemini API key in Settings");
-        return;
-      }
-      if (mode === "meal") {
-        const result = await analyzeMealImage(apiKey, blob);
-        if (gen !== requestGen.current) return;
-        setScan(result);
-        setLabelScan(null);
-        setEdit(toEditable(result));
-      } else {
-        const result = await analyzeNutritionLabel(apiKey, blob);
-        if (gen !== requestGen.current) return;
-        setLabelScan(result);
-        setScan(null);
-        setPortionRaw(String(result.basisGrams));
-        setResolvedGrams(result.basisGrams);
-        setResolvedPortion({ kind: "grams", grams: result.basisGrams });
-        const scaled = scaleLabelNutrition(result, result.basisGrams);
-        setEdit(scaled ? toEditable(scaled) : null);
-      }
-    } catch (err) {
-      if (gen !== requestGen.current) return;
-      const message = err instanceof Error ? err.message : "Scan failed";
-      toast.error(message, {
-        action: {
-          label: "Save pending",
-          onClick: () => void savePending(message),
-        },
-      });
-    } finally {
-      if (gen === requestGen.current) setBusy(false);
-    }
-  };
-
-  const resolvePortionGrams = async (
-    portion: PortionInput,
-  ): Promise<number | null> => {
-    if (!labelScan || !blob) return null;
-    if (portion.kind === "grams") return portion.grams;
-    if (!online) {
-      toast.error("You need internet to estimate a portion description");
-      return null;
-    }
-    const apiKey = await getGeminiApiKey();
-    if (!apiKey) {
-      toast.error("Add your Gemini API key in Settings");
-      return null;
-    }
-    return estimatePortionGrams(
-      apiKey,
-      blob,
-      labelScan.label,
-      labelScan.basisGrams,
-      portion.text,
-    );
-  };
-
-  const applyPortionResolution = (portion: PortionInput, grams: number) => {
-    setResolvedGrams(grams);
-    setResolvedPortion(portion);
-    if (!labelScan) return;
-    const scaled = scaleLabelNutrition(labelScan, grams);
-    if (scaled) setEdit(toEditable(scaled));
-  };
-
-  const estimatePortion = async () => {
-    if (!labelScan || !portionParsed || portionParsed.kind !== "description") {
-      return;
-    }
-    const gen = ++requestGen.current;
-    setBusy(true);
-    try {
-      const grams = await resolvePortionGrams(portionParsed);
-      if (gen !== requestGen.current || grams == null) return;
-      applyPortionResolution(portionParsed, grams);
-    } catch (err) {
-      if (gen !== requestGen.current) return;
-      toast.error(
-        err instanceof Error ? err.message : "Could not estimate portion",
+    if (mode === "label" && labelTab === "previous") {
+      if (!selectedPrevious) return;
+      await queueLabelOrMeal(
+        selectedPrevious.imageBlob,
+        "label",
+        portionRaw,
       );
-    } finally {
-      if (gen === requestGen.current) setBusy(false);
+      return;
     }
+    if (!blob || !mode) return;
+    await queueLabelOrMeal(blob, mode, portionRaw);
   };
 
-  const save = async () => {
-    if (!blob || !mode) {
-      toast.error("Add a photo first");
-      return;
-    }
-    let payload: ScanResult | null = null;
-    if (mode === "meal") {
-      if (!scan || !edit) return;
-      payload = fromEditable(edit);
-    } else {
-      if (!labelScan || !portionParsed) {
-        toast.error('Enter grams or a portion like "1 teaspoon"');
-        return;
-      }
-      const gen = ++requestGen.current;
-      setBusy(true);
-      try {
-        const wasReady = portionReady;
-        let grams = wasReady ? resolvedGrams : null;
-        let portion = wasReady ? resolvedPortion : portionParsed;
-        if (grams == null || portion == null) {
-          grams = await resolvePortionGrams(portionParsed);
-          if (gen !== requestGen.current) return;
-          if (grams == null) return;
-          portion = portionParsed;
-          applyPortionResolution(portion, grams);
-        }
-        const scaled = scaleLabelNutrition(labelScan, grams);
-        if (!scaled) {
-          toast.error('Enter grams or a portion like "1 teaspoon"');
-          return;
-        }
-        // Only keep manual macro tweaks when this portion was already applied.
-        const edited =
-          wasReady && edit ? fromEditable(edit) : scaled;
-        if (!edited) {
-          toast.error("Check the nutrition numbers");
-          return;
-        }
-        payload = {
-          ...edited,
-          label: `${edited.label} (${formatPortionSuffix(portion, grams)})`,
-        };
-        await onSaved({
-          ...payload,
-          imageBlob: blob,
-          status: "logged",
-          scanMode: mode,
-        });
-        toast.success("Meal added");
-        handleOpenChange(false);
-      } catch (err) {
-        if (gen !== requestGen.current) return;
-        toast.error(err instanceof Error ? err.message : "Could not save meal");
-      } finally {
-        if (gen === requestGen.current) setBusy(false);
-      }
-      return;
-    }
-    if (!payload) {
-      toast.error("Check the nutrition numbers");
-      return;
-    }
-    try {
-      setBusy(true);
-      await onSaved({
-        ...payload,
-        imageBlob: blob,
-        status: "logged",
-        scanMode: mode,
-      });
-      toast.success("Meal added");
-      handleOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save meal");
-    } finally {
-      setBusy(false);
-    }
+  const filteredPrevious = filterByFoodQuery(previousEntries, searchQuery);
+
+  const applySearch = () => {
+    setSearchQuery(searchDraft.trim());
   };
 
-  // Scale macros when the user types a gram amount; descriptions need Estimate.
-  const onPortionChange = (next: string) => {
-    setPortionRaw(next);
-    const parsed = parsePortionInput(next);
-    if (!parsed || parsed.kind !== "grams") {
-      setResolvedGrams(null);
-      setResolvedPortion(null);
-      return;
+  const selectPrevious = (meal: Meal) => {
+    setSelectedPrevious(meal);
+    setPortionRaw("");
+  };
+
+  const renderPortionField = (id: string) => (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>Amount eaten</Label>
+      <Input
+        id={id}
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        placeholder='e.g. 150 or 1 row of chocolate'
+        value={portionRaw}
+        onChange={(e) => setPortionRaw(e.target.value)}
+        disabled={busy}
+      />
+      <p className="text-muted-foreground text-xs">
+        Required. Grams, or a portion like &quot;1 row of chocolate&quot; or
+        &quot;one teaspoon&quot;.
+      </p>
+    </div>
+  );
+
+  const renderNewLabelFlow = () => (
+    <>
+      <Alert>
+        <AlertTitle>Photograph the nutrition facts</AlertTitle>
+        <AlertDescription>
+          Capture the macro breakdown on the label (calories, protein, carbs,
+          fat). Do not photograph the barcode — the AI needs the actual
+          nutrition panel. Enter how much you ate before analyzing.
+        </AlertDescription>
+      </Alert>
+
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          className="flex-1"
+          onClick={() => cameraRef.current?.click()}
+          disabled={busy}
+        >
+          <Camera />
+          Camera
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="flex-1"
+          onClick={() => galleryRef.current?.click()}
+          disabled={busy}
+        >
+          <ImagePlus />
+          Gallery
+        </Button>
+      </div>
+
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => handleFileChange(e.currentTarget)}
+      />
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => handleFileChange(e.currentTarget)}
+      />
+
+      {previewUrl ? (
+        <div className="bg-muted overflow-hidden rounded-xl">
+          <img
+            src={previewUrl}
+            alt="Label preview"
+            className="max-h-64 w-full object-cover"
+          />
+        </div>
+      ) : (
+        <div className="text-muted-foreground border-border flex h-40 items-center justify-center rounded-xl border border-dashed text-sm">
+          No photo yet
+        </div>
+      )}
+
+      {renderPortionField("portion-new")}
+    </>
+  );
+
+  const renderPreviousLabelFlow = () => {
+    if (selectedPrevious) {
+      const name = productNameFromLabel(selectedPrevious.label);
+      return (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="-mt-1 w-fit px-2"
+            onClick={() => {
+              setSelectedPrevious(null);
+              setPortionRaw("");
+            }}
+            disabled={busy}
+          >
+            <ArrowLeft />
+            Back to list
+          </Button>
+
+          <div className="flex gap-3 rounded-xl border p-3">
+            <div className="bg-muted size-16 shrink-0 overflow-hidden rounded-lg">
+              {selectedPreviewUrl ? (
+                <img
+                  src={selectedPreviewUrl}
+                  alt={name}
+                  className="size-full object-cover"
+                />
+              ) : null}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate font-medium">{name}</p>
+              <p className="text-muted-foreground text-xs tabular-nums">
+                Last logged · {Math.round(selectedPrevious.calories)} kcal · P{" "}
+                {formatMacro(selectedPrevious.proteinG)}g · C{" "}
+                {formatMacro(selectedPrevious.carbsG)}g · F{" "}
+                {formatMacro(selectedPrevious.fatG)}g
+              </p>
+            </div>
+          </div>
+
+          {renderPortionField("portion-previous")}
+        </>
+      );
     }
-    applyPortionResolution(parsed, parsed.grams);
+
+    return (
+      <>
+        <div className="flex gap-2">
+          <Input
+            type="search"
+            inputMode="search"
+            autoComplete="off"
+            placeholder="Search previous labels…"
+            value={searchDraft}
+            onChange={(e) => setSearchDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applySearch();
+              }
+            }}
+            disabled={busy || previousLoading}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={applySearch}
+            disabled={busy || previousLoading}
+          >
+            <Search />
+            Search
+          </Button>
+        </div>
+
+        {previousLoading ? (
+          <div className="text-muted-foreground flex h-40 items-center justify-center gap-2 text-sm">
+            <Loader2 className="size-4 animate-spin" />
+            Loading previous labels…
+          </div>
+        ) : filteredPrevious.length === 0 ? (
+          <div className="text-muted-foreground border-border flex h-40 items-center justify-center rounded-xl border border-dashed px-4 text-center text-sm">
+            {previousEntries.length === 0
+              ? "No previous nutrition labels yet. Scan one in the New tab."
+              : "No labels match that search."}
+          </div>
+        ) : (
+          <ul className="max-h-64 space-y-2 overflow-y-auto">
+            {filteredPrevious.map((meal) => {
+              const name = productNameFromLabel(meal.label);
+              return (
+                <li key={meal.id}>
+                  <button
+                    type="button"
+                    onClick={() => selectPrevious(meal)}
+                    disabled={busy}
+                    className={cn(
+                      "hover:bg-secondary/80 border-border flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors",
+                    )}
+                  >
+                    <PreviousThumb blob={meal.imageBlob} alt={name} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{name}</span>
+                      <span className="text-muted-foreground mt-0.5 block text-xs tabular-nums">
+                        {Math.round(meal.calories)} kcal · P{" "}
+                        {formatMacro(meal.proteinG)}g · C{" "}
+                        {formatMacro(meal.carbsG)}g · F{" "}
+                        {formatMacro(meal.fatG)}g
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </>
+    );
   };
 
   return (
@@ -419,8 +452,10 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
             {!mode
               ? "Choose how you want to log this food."
               : mode === "meal"
-                ? "Photograph the plate, then analyze with Gemini."
-                : "Photograph the nutrition facts panel, then enter grams or a portion description."}
+                ? "Photograph the plate, then queue it for analysis."
+                : labelTab === "previous"
+                  ? "Pick a previously scanned label and enter how much you ate."
+                  : "Photograph the nutrition facts panel and enter the amount eaten, then queue for analysis."}
           </DialogDescription>
         </DialogHeader>
 
@@ -429,7 +464,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
             <WifiOff className="size-4" />
             <AlertTitle>Offline</AlertTitle>
             <AlertDescription>
-              You can still save a photo as pending. It will scan automatically
+              You can still queue a photo as pending. It will scan automatically
               when you&apos;re back online.
             </AlertDescription>
           </Alert>
@@ -463,8 +498,8 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
               <span>
                 <span className="block font-medium">Nutrition label</span>
                 <span className="text-muted-foreground mt-1 block text-sm">
-                  Read macros from the package label, then enter grams or a
-                  portion.
+                  Read macros from the package label with image and portion
+                  together.
                 </span>
               </span>
             </button>
@@ -478,6 +513,8 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
               className="-mt-1 w-fit px-2"
               onClick={() => {
                 clearPhoto();
+                setSelectedPrevious(null);
+                setLabelTab("new");
                 setMode(null);
               }}
               disabled={busy}
@@ -487,178 +524,90 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
             </Button>
 
             {mode === "label" ? (
-              <Alert>
-                <AlertTitle>Photograph the nutrition facts</AlertTitle>
-                <AlertDescription>
-                  Capture the macro breakdown on the label (calories, protein,
-                  carbs, fat). Do not photograph the barcode — the AI needs the
-                  actual nutrition panel.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                className="flex-1"
-                onClick={() => cameraRef.current?.click()}
-                disabled={busy}
+              <Tabs
+                value={labelTab}
+                onValueChange={(v) => {
+                  const next = v as LabelSourceTab;
+                  setLabelTab(next);
+                  setPortionRaw("");
+                  setSelectedPrevious(null);
+                  if (next === "new") {
+                    /* keep photo if user switches back */
+                  } else {
+                    setBlob(null);
+                  }
+                }}
               >
-                <Camera />
-                Camera
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1"
-                onClick={() => galleryRef.current?.click()}
-                disabled={busy}
-              >
-                <ImagePlus />
-                Gallery
-              </Button>
-            </div>
-
-            <input
-              ref={cameraRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => handleFileChange(e.currentTarget)}
-            />
-            <input
-              ref={galleryRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => handleFileChange(e.currentTarget)}
-            />
-
-            {previewUrl ? (
-              <div className="bg-muted overflow-hidden rounded-xl">
-                <img
-                  src={previewUrl}
-                  alt={mode === "label" ? "Label preview" : "Meal preview"}
-                  className="max-h-64 w-full object-cover"
-                />
-              </div>
+                <TabsList className="w-full">
+                  <TabsTrigger value="new" className="flex-1">
+                    New
+                  </TabsTrigger>
+                  <TabsTrigger value="previous" className="flex-1">
+                    Previous
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="new" className="grid gap-3">
+                  {renderNewLabelFlow()}
+                </TabsContent>
+                <TabsContent value="previous" className="grid gap-3">
+                  {renderPreviousLabelFlow()}
+                </TabsContent>
+              </Tabs>
             ) : (
-              <div className="text-muted-foreground border-border flex h-40 items-center justify-center rounded-xl border border-dashed text-sm">
-                No photo yet
-              </div>
+              <>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    className="flex-1"
+                    onClick={() => cameraRef.current?.click()}
+                    disabled={busy}
+                  >
+                    <Camera />
+                    Camera
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => galleryRef.current?.click()}
+                    disabled={busy}
+                  >
+                    <ImagePlus />
+                    Gallery
+                  </Button>
+                </div>
+
+                <input
+                  ref={cameraRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => handleFileChange(e.currentTarget)}
+                />
+                <input
+                  ref={galleryRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleFileChange(e.currentTarget)}
+                />
+
+                {previewUrl ? (
+                  <div className="bg-muted overflow-hidden rounded-xl">
+                    <img
+                      src={previewUrl}
+                      alt="Meal preview"
+                      className="max-h-64 w-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground border-border flex h-40 items-center justify-center rounded-xl border border-dashed text-sm">
+                    No photo yet
+                  </div>
+                )}
+              </>
             )}
-
-            {labelScan ? (
-              <div className="space-y-3 rounded-xl border p-3">
-                <p className="text-muted-foreground text-xs tabular-nums">
-                  Label basis: {Math.round(labelScan.calories)} kcal · P{" "}
-                  {roundMacro(labelScan.proteinG)}g · C{" "}
-                  {roundMacro(labelScan.carbsG)}g · F{" "}
-                  {roundMacro(labelScan.fatG)}g per {labelScan.basisGrams}g
-                </p>
-                <div className="grid gap-2">
-                  <Label htmlFor="portion">Amount eaten</Label>
-                  <Input
-                    id="portion"
-                    type="text"
-                    inputMode="text"
-                    autoComplete="off"
-                    placeholder='e.g. 150 or 1 row of chocolate'
-                    value={portionRaw}
-                    onChange={(e) => onPortionChange(e.target.value)}
-                  />
-                  <p className="text-muted-foreground text-xs">
-                    Grams, or a portion like &quot;1 row of chocolate&quot; or
-                    &quot;one teaspoon&quot;.
-                  </p>
-                  {needsPortionEstimate ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void estimatePortion()}
-                        disabled={busy || !online}
-                      >
-                        {busy ? <Loader2 className="animate-spin" /> : null}
-                        Estimate portion
-                      </Button>
-                      {portionReady && resolvedGrams != null ? (
-                        <span className="text-muted-foreground text-xs tabular-nums">
-                          ≈ {roundMacro(resolvedGrams)}g
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            {edit && hasScanResult && (mode !== "label" || portionReady) ? (
-              <div className="grid gap-2 rounded-xl border p-3">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="food-label">Name</Label>
-                  <Input
-                    id="food-label"
-                    value={edit.label}
-                    onChange={(e) =>
-                      setEdit({ ...edit, label: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="kcal">Calories</Label>
-                    <Input
-                      id="kcal"
-                      type="number"
-                      inputMode="decimal"
-                      value={edit.calories}
-                      onChange={(e) =>
-                        setEdit({ ...edit, calories: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="protein">Protein (g)</Label>
-                    <Input
-                      id="protein"
-                      type="number"
-                      inputMode="decimal"
-                      value={edit.proteinG}
-                      onChange={(e) =>
-                        setEdit({ ...edit, proteinG: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="carbs">Carbs (g)</Label>
-                    <Input
-                      id="carbs"
-                      type="number"
-                      inputMode="decimal"
-                      value={edit.carbsG}
-                      onChange={(e) =>
-                        setEdit({ ...edit, carbsG: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="fat">Fat (g)</Label>
-                    <Input
-                      id="fat"
-                      type="number"
-                      inputMode="decimal"
-                      value={edit.fatG}
-                      onChange={(e) =>
-                        setEdit({ ...edit, fatG: e.target.value })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : null}
 
             <p className="text-muted-foreground text-xs">
               Missing a key?{" "}
@@ -671,59 +620,37 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
               </Link>
             </p>
 
-            <DialogFooter className="gap-2 sm:gap-2">
-              {hasScanResult ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void analyze()}
-                    disabled={!blob || busy || !online}
-                  >
-                    {busy ? <Loader2 className="animate-spin" /> : null}
-                    Re-analyze
-                  </Button>
-                  <Button
-                    onClick={() => void save()}
-                    disabled={
-                      busy ||
-                      !blob ||
-                      (mode === "label"
-                        ? !portionParsed ||
-                          (portionParsed.kind === "grams" && !scaledLabel)
-                        : !edit)
-                    }
-                  >
-                    {busy ? <Loader2 className="animate-spin" /> : null}
-                    Save meal
-                  </Button>
-                </>
-              ) : (
-                <>
-                  {!online && blob ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void savePending()}
-                      disabled={busy}
-                    >
-                      {busy ? <Loader2 className="animate-spin" /> : null}
-                      Save for later
-                    </Button>
-                  ) : null}
-                  <Button
-                    onClick={() => void analyze()}
-                    disabled={!blob || busy}
-                  >
-                    {busy ? <Loader2 className="animate-spin" /> : null}
-                    {online ? "Analyze" : "Save pending"}
-                  </Button>
-                </>
-              )}
-            </DialogFooter>
+            {(mode === "meal" ||
+              labelTab === "new" ||
+              selectedPrevious) && (
+              <DialogFooter className="gap-2 sm:gap-2">
+                <Button
+                  onClick={() => void analyze()}
+                  disabled={
+                    mode === "label" && labelTab === "previous"
+                      ? !canAnalyzePrevious
+                      : !canAnalyzeNew
+                  }
+                >
+                  {busy ? <Loader2 className="animate-spin" /> : null}
+                  {online ? "Analyze" : "Save pending"}
+                </Button>
+              </DialogFooter>
+            )}
           </>
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PreviousThumb({ blob, alt }: { blob: Blob; alt: string }) {
+  const url = useObjectUrl(blob);
+  return (
+    <span className="bg-muted size-12 shrink-0 overflow-hidden rounded-lg">
+      {url ? (
+        <img src={url} alt={alt} className="size-full object-cover" />
+      ) : null}
+    </span>
   );
 }

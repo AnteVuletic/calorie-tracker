@@ -2,8 +2,6 @@ import {
   format,
   parseISO,
   startOfDay,
-  subDays,
-  isBefore,
   isAfter,
   startOfWeek,
   endOfWeek,
@@ -11,9 +9,6 @@ import {
   differenceInMilliseconds,
   addDays,
 } from "date-fns";
-import { RETENTION_DAYS } from "@/lib/types";
-
-export { RETENTION_DAYS };
 
 export function toDayKey(date: Date = new Date()): string {
   return format(date, "yyyy-MM-dd");
@@ -23,20 +18,17 @@ export function parseDayKey(dayKey: string): Date {
   return startOfDay(parseISO(dayKey));
 }
 
-/** Inclusive window of RETENTION_DAYS ending today (e.g. 30 → today and previous 29 days). */
-export function retentionCutoff(now = new Date()): Date {
-  return startOfDay(subDays(now, RETENTION_DAYS - 1));
+/** True when dayKey is today or earlier (local calendar). */
+export function isNotFuture(dayKey: string, now = new Date()): boolean {
+  return !isAfter(parseDayKey(dayKey), startOfDay(now));
 }
 
-export function retentionFromKey(now = new Date()): string {
-  return toDayKey(retentionCutoff(now));
-}
-
-export function isWithinRetention(dayKey: string, now = new Date()): boolean {
-  const day = parseDayKey(dayKey);
-  const cutoff = retentionCutoff(now);
+/** Clamp a date to today if it is in the future. */
+export function clampToToday(date: Date, now = new Date()): Date {
   const today = startOfDay(now);
-  return !isBefore(day, cutoff) && !isAfter(day, today);
+  const day = startOfDay(date);
+  if (isAfter(day, today)) return today;
+  return day;
 }
 
 export function formatDisplayDate(dayKey: string): string {
@@ -47,15 +39,6 @@ export function weekDayKeys(anchor: Date = new Date()): string[] {
   const start = startOfWeek(anchor, { weekStartsOn: 1 });
   const end = endOfWeek(anchor, { weekStartsOn: 1 });
   return eachDayOfInterval({ start, end }).map((d) => toDayKey(d));
-}
-
-export function clampDateToRetention(date: Date, now = new Date()): Date {
-  const cutoff = retentionCutoff(now);
-  const today = startOfDay(now);
-  const day = startOfDay(date);
-  if (isBefore(day, cutoff)) return cutoff;
-  if (isAfter(day, today)) return today;
-  return day;
 }
 
 /** Ms until next local midnight (or slightly after). */

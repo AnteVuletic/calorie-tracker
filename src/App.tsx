@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode, useEffect } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { BottomNav } from "@/components/bottom-nav";
@@ -6,7 +6,6 @@ import { TodayPage } from "@/pages/today-page";
 import { HistoryPage } from "@/pages/history-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { Button } from "@/components/ui/button";
-import { purgeOldMeals } from "@/lib/db";
 import { useScanQueue } from "@/hooks/use-meals";
 
 class ErrorBoundary extends Component<
@@ -38,10 +37,6 @@ class ErrorBoundary extends Component<
 
 export default function App() {
   useScanQueue();
-
-  useEffect(() => {
-    void purgeOldMeals().catch((err) => console.error(err));
-  }, []);
 
   return (
     <div

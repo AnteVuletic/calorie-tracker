@@ -2,7 +2,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { useApiKey } from "@/hooks/use-meals";
-import { RETENTION_DAYS } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -125,8 +124,8 @@ export function SettingsPage() {
         <AlertTitle>Data & privacy</AlertTitle>
         <AlertDescription className="space-y-2">
           <p>
-            Meals, photos, and your API key are stored in this browser for up to{" "}
-            {RETENTION_DAYS} days (older meals are deleted automatically).
+            Meals, photos, and your API key are stored in this browser until you
+            delete them.
           </p>
           <p>
             When you scan a photo, that image is sent to Google Gemini to
