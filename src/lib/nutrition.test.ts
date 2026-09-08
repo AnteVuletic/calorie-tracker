@@ -36,16 +36,16 @@ describe("mediaResolutionForMode", () => {
 
 describe("thinkingLevelForMode", () => {
   it("uses stronger thinking for meals and minimal for labels", () => {
-    expect(thinkingLevelForMode("meal")).toBe("medium");
+    expect(thinkingLevelForMode("meal")).toBe("high");
     expect(thinkingLevelForMode("label")).toBe("minimal");
   });
 });
 
 describe("modelForMode", () => {
-  it("uses full flash for meals and flash-lite for labels", () => {
+  it("uses flash-lite for meals and labels", () => {
     expect(modelForMode("meal")).toBe(GEMINI_MEAL_MODEL);
     expect(modelForMode("label")).toBe(GEMINI_LABEL_MODEL);
-    expect(GEMINI_MEAL_MODEL).toBe("gemini-3.6-flash");
+    expect(GEMINI_MEAL_MODEL).toBe("gemini-3.5-flash-lite");
     expect(GEMINI_LABEL_MODEL).toBe("gemini-3.5-flash-lite");
   });
 });

@@ -18,10 +18,10 @@ export type LabelScanResult = ScanResult & {
   basisGrams: number;
 };
 
-/** Stronger Flash for plate estimates (vision + portion reasoning). */
-export const GEMINI_MEAL_MODEL = "gemini-3.6-flash";
+/** Flash-Lite for meal estimates and label OCR (cost-efficient). */
+export const GEMINI_MEAL_MODEL = "gemini-3.5-flash-lite";
 
-/** Cheap Flash-Lite for nutrition-label OCR / portion scaling. */
+/** Same cheap Flash-Lite for nutrition-label OCR / portion scaling. */
 export const GEMINI_LABEL_MODEL = "gemini-3.5-flash-lite";
 
 export function modelForMode(mode: ScanMode): string {
@@ -44,7 +44,7 @@ export function mediaResolutionForMode(mode: ScanMode): MediaResolution {
 
 /** Stronger reasoning for plate estimates; keep labels cheap (OCR-ish). */
 export function thinkingLevelForMode(mode: ScanMode): ThinkingLevel {
-  return mode === "meal" ? "medium" : "minimal";
+  return mode === "meal" ? "high" : "minimal";
 }
 
 const SENTINEL_LABELS = new Set([
