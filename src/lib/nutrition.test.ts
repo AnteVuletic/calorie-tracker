@@ -33,7 +33,7 @@ describe("mediaResolutionForMode", () => {
 
 describe("GEMINI_MODEL", () => {
   it("uses the cost-efficient flash-lite model", () => {
-    expect(GEMINI_MODEL).toBe("gemini-2.5-flash-lite");
+    expect(GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
   });
 });
 

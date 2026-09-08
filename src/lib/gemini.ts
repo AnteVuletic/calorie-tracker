@@ -20,10 +20,9 @@ export type LabelScanResult = ScanResult & {
 
 /**
  * Cost-optimized vision model for meal/label JSON extraction.
- * gemini-2.5-flash-lite ($0.10/$0.40 per 1M) vs prior gemini-3.6-flash
- * ($0.75/$3.75 intro + medium thinking tokens).
+ * gemini-3.5-flash-lite for meal/label JSON extraction.
  */
-export const GEMINI_MODEL = "gemini-2.5-flash-lite";
+export const GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 /** Cap image tokens; meal needs less detail than label OCR. */
 export type MediaResolution =
