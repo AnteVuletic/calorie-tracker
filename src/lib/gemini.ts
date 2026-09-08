@@ -132,10 +132,11 @@ async function runVision(
   }
   const genAI = new GoogleGenerativeAI(apiKey.trim());
   // thinkingConfig / mediaResolution are accepted by the API; SDK types lag.
+  // Gemini 3.x rejects thinkingBudget; use thinkingLevel (minimal = fastest).
   const generationConfig = {
     responseMimeType: "application/json",
     maxOutputTokens: 512,
-    thinkingConfig: { thinkingBudget: 0 },
+    thinkingConfig: { thinkingLevel: "minimal" },
     mediaResolution: mediaResolutionForMode(mode),
   };
   const model = genAI.getGenerativeModel({
