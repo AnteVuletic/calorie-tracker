@@ -18,11 +18,15 @@ export type LabelScanResult = ScanResult & {
   basisGrams: number;
 };
 
-/**
- * Cost-optimized vision model for meal/label JSON extraction.
- * gemini-3.5-flash-lite for meal/label JSON extraction.
- */
-export const GEMINI_MODEL = "gemini-3.5-flash-lite";
+/** Stronger Flash for plate estimates (vision + portion reasoning). */
+export const GEMINI_MEAL_MODEL = "gemini-3.6-flash";
+
+/** Cheap Flash-Lite for nutrition-label OCR / portion scaling. */
+export const GEMINI_LABEL_MODEL = "gemini-3.5-flash-lite";
+
+export function modelForMode(mode: ScanMode): string {
+  return mode === "meal" ? GEMINI_MEAL_MODEL : GEMINI_LABEL_MODEL;
+}
 
 /** Cap image tokens; meal needs less detail than label OCR. */
 export type MediaResolution =
@@ -30,7 +34,7 @@ export type MediaResolution =
   | "MEDIA_RESOLUTION_MEDIUM"
   | "MEDIA_RESOLUTION_HIGH";
 
-/** Gemini 3.x thinking depth; flash-lite supports minimal → high. */
+/** Gemini 3.x thinking depth; flash / flash-lite support these levels. */
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export function mediaResolutionForMode(mode: ScanMode): MediaResolution {
@@ -150,7 +154,7 @@ async function runVision(
     mediaResolution: mediaResolutionForMode(mode),
   };
   const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
+    model: modelForMode(mode),
     generationConfig,
   });
   const base64 = await blobToBase64(image);

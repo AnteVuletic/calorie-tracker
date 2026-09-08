@@ -3,8 +3,10 @@ import {
   buildMealPrompt,
   extractJson,
   formatPortionSuffix,
-  GEMINI_MODEL,
+  GEMINI_LABEL_MODEL,
+  GEMINI_MEAL_MODEL,
   mediaResolutionForMode,
+  modelForMode,
   parseLabelScanResult,
   parsePortionGramsResult,
   parsePortionInput,
@@ -39,9 +41,12 @@ describe("thinkingLevelForMode", () => {
   });
 });
 
-describe("GEMINI_MODEL", () => {
-  it("uses the cost-efficient flash-lite model", () => {
-    expect(GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
+describe("modelForMode", () => {
+  it("uses full flash for meals and flash-lite for labels", () => {
+    expect(modelForMode("meal")).toBe(GEMINI_MEAL_MODEL);
+    expect(modelForMode("label")).toBe(GEMINI_LABEL_MODEL);
+    expect(GEMINI_MEAL_MODEL).toBe("gemini-3.6-flash");
+    expect(GEMINI_LABEL_MODEL).toBe("gemini-3.5-flash-lite");
   });
 });
 
