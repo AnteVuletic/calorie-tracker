@@ -18,8 +18,23 @@ export type LabelScanResult = ScanResult & {
   basisGrams: number;
 };
 
-/** Prefer cost-efficient flash for photo/label parsing (2.5 Flash retired for new users). */
-export const GEMINI_MODEL = "gemini-3.6-flash";
+/**
+ * Cost-optimized vision model for meal/label JSON extraction.
+ * gemini-2.5-flash-lite ($0.10/$0.40 per 1M) vs prior gemini-3.6-flash
+ * ($0.75/$3.75 intro + medium thinking tokens).
+ */
+export const GEMINI_MODEL = "gemini-2.5-flash-lite";
+
+/** Cap image tokens; meal needs less detail than label OCR. */
+export type MediaResolution =
+  | "MEDIA_RESOLUTION_LOW"
+  | "MEDIA_RESOLUTION_MEDIUM"
+  | "MEDIA_RESOLUTION_HIGH";
+
+export function mediaResolutionForMode(mode: ScanMode): MediaResolution {
+  // Labels need readable small text; meals only need plate-level detail.
+  return mode === "label" ? "MEDIA_RESOLUTION_MEDIUM" : "MEDIA_RESOLUTION_LOW";
+}
 
 const SENTINEL_LABELS = new Set([
   "not food",
@@ -111,16 +126,22 @@ async function runVision(
   apiKey: string,
   image: Blob,
   prompt: string,
+  mode: ScanMode = "meal",
 ): Promise<string> {
   if (!apiKey.trim()) {
     throw new Error("Missing Gemini API key");
   }
   const genAI = new GoogleGenerativeAI(apiKey.trim());
+  // thinkingConfig / mediaResolution are accepted by the API; SDK types lag.
+  const generationConfig = {
+    responseMimeType: "application/json",
+    maxOutputTokens: 512,
+    thinkingConfig: { thinkingBudget: 0 },
+    mediaResolution: mediaResolutionForMode(mode),
+  };
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
-    generationConfig: {
-      responseMimeType: "application/json",
-    },
+    generationConfig,
   });
   const base64 = await blobToBase64(image);
   const result = await model.generateContent([
@@ -149,7 +170,12 @@ export async function analyzeMealImage(
   image: Blob,
   extraContext?: string,
 ): Promise<ScanResult> {
-  const text = await runVision(apiKey, image, buildMealPrompt(extraContext));
+  const text = await runVision(
+    apiKey,
+    image,
+    buildMealPrompt(extraContext),
+    "meal",
+  );
   return parseScanResult(extractJson(text));
 }
 
@@ -157,7 +183,7 @@ export async function analyzeNutritionLabel(
   apiKey: string,
   image: Blob,
 ): Promise<LabelScanResult> {
-  const text = await runVision(apiKey, image, LABEL_PROMPT);
+  const text = await runVision(apiKey, image, LABEL_PROMPT, "label");
   return parseLabelScanResult(extractJson(text));
 }
 
@@ -241,7 +267,7 @@ chocolate row ≈ a fraction of a standard bar).
 Return ONLY valid JSON with this exact shape (no markdown):
 {"grams":number}
 grams must be a positive number.`;
-  const text = await runVision(apiKey, image, prompt);
+  const text = await runVision(apiKey, image, prompt, "label");
   return parsePortionGramsResult(extractJson(text));
 }
 

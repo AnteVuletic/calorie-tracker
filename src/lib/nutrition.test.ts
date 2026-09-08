@@ -3,6 +3,8 @@ import {
   buildMealPrompt,
   extractJson,
   formatPortionSuffix,
+  GEMINI_MODEL,
+  mediaResolutionForMode,
   parseLabelScanResult,
   parsePortionGramsResult,
   parsePortionInput,
@@ -10,12 +12,40 @@ import {
   scaleLabelNutrition,
 } from "@/lib/gemini";
 import {
+  compressOptionsForMode,
+  DEFAULT_LABEL,
+  DEFAULT_MEAL,
+} from "@/lib/image";
+import {
   dedupeBySimilarName,
   filterByFoodQuery,
   nameSimilarity,
   productNameFromLabel,
 } from "@/lib/food-match";
 import { sumMeals } from "@/lib/types";
+
+describe("mediaResolutionForMode", () => {
+  it("uses low for meals and medium for labels", () => {
+    expect(mediaResolutionForMode("meal")).toBe("MEDIA_RESOLUTION_LOW");
+    expect(mediaResolutionForMode("label")).toBe("MEDIA_RESOLUTION_MEDIUM");
+  });
+});
+
+describe("GEMINI_MODEL", () => {
+  it("uses the cost-efficient flash-lite model", () => {
+    expect(GEMINI_MODEL).toBe("gemini-2.5-flash-lite");
+  });
+});
+
+describe("compressOptionsForMode", () => {
+  it("keeps meal images near one vision tile and labels sharper", () => {
+    expect(compressOptionsForMode("meal")).toEqual(DEFAULT_MEAL);
+    expect(compressOptionsForMode("label")).toEqual(DEFAULT_LABEL);
+    expect(DEFAULT_MEAL.maxEdge).toBeLessThanOrEqual(768);
+    expect(DEFAULT_LABEL.maxEdge).toBeLessThanOrEqual(1280);
+    expect(DEFAULT_LABEL.maxEdge).toBeGreaterThan(DEFAULT_MEAL.maxEdge);
+  });
+});
 
 describe("buildMealPrompt", () => {
   it("returns the base prompt when context is missing or blank", () => {

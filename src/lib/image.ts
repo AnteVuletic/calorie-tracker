@@ -3,9 +3,22 @@ export type CompressOptions = {
   quality?: number;
 };
 
-const DEFAULT_MEAL: Required<CompressOptions> = { maxEdge: 1280, quality: 0.7 };
-/** Higher fidelity for small nutrition-panel text. */
-const DEFAULT_LABEL: Required<CompressOptions> = { maxEdge: 2048, quality: 0.92 };
+/**
+ * Meal photos: keep near one Gemini 2.5 tile (≤768px → ~258 image tokens).
+ * Plate-level macros do not need fine OCR.
+ */
+export const DEFAULT_MEAL: Required<CompressOptions> = {
+  maxEdge: 768,
+  quality: 0.62,
+};
+/**
+ * Labels: enough pixels for panel text without 2k+ edges.
+ * Still well above meal size; JPEG quality trades bytes for OCR clarity.
+ */
+export const DEFAULT_LABEL: Required<CompressOptions> = {
+  maxEdge: 1280,
+  quality: 0.8,
+};
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
