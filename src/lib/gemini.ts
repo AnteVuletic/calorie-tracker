@@ -30,9 +30,17 @@ export type MediaResolution =
   | "MEDIA_RESOLUTION_MEDIUM"
   | "MEDIA_RESOLUTION_HIGH";
 
+/** Gemini 3.x thinking depth; flash-lite supports minimal → high. */
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+
 export function mediaResolutionForMode(mode: ScanMode): MediaResolution {
   // Labels need readable small text; meals only need plate-level detail.
   return mode === "label" ? "MEDIA_RESOLUTION_MEDIUM" : "MEDIA_RESOLUTION_LOW";
+}
+
+/** Stronger reasoning for plate estimates; keep labels cheap (OCR-ish). */
+export function thinkingLevelForMode(mode: ScanMode): ThinkingLevel {
+  return mode === "meal" ? "medium" : "minimal";
 }
 
 const SENTINEL_LABELS = new Set([
@@ -133,10 +141,12 @@ async function runVision(
   const genAI = new GoogleGenerativeAI(apiKey.trim());
   // thinkingConfig / mediaResolution are accepted by the API; SDK types lag.
   // Gemini 3.x rejects thinkingBudget; use thinkingLevel (minimal = fastest).
+  const thinkingLevel = thinkingLevelForMode(mode);
   const generationConfig = {
     responseMimeType: "application/json",
-    maxOutputTokens: 512,
-    thinkingConfig: { thinkingLevel: "minimal" },
+    // Meal thinking can consume output budget; leave headroom for JSON.
+    maxOutputTokens: mode === "meal" ? 2048 : 512,
+    thinkingConfig: { thinkingLevel },
     mediaResolution: mediaResolutionForMode(mode),
   };
   const model = genAI.getGenerativeModel({

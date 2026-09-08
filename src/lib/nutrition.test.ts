@@ -10,6 +10,7 @@ import {
   parsePortionInput,
   parseScanResult,
   scaleLabelNutrition,
+  thinkingLevelForMode,
 } from "@/lib/gemini";
 import {
   compressOptionsForMode,
@@ -28,6 +29,13 @@ describe("mediaResolutionForMode", () => {
   it("uses low for meals and medium for labels", () => {
     expect(mediaResolutionForMode("meal")).toBe("MEDIA_RESOLUTION_LOW");
     expect(mediaResolutionForMode("label")).toBe("MEDIA_RESOLUTION_MEDIUM");
+  });
+});
+
+describe("thinkingLevelForMode", () => {
+  it("uses stronger thinking for meals and minimal for labels", () => {
+    expect(thinkingLevelForMode("meal")).toBe("medium");
+    expect(thinkingLevelForMode("label")).toBe("minimal");
   });
 });
 
