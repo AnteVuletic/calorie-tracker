@@ -42,9 +42,9 @@ export function mediaResolutionForMode(mode: ScanMode): MediaResolution {
   return mode === "label" ? "MEDIA_RESOLUTION_MEDIUM" : "MEDIA_RESOLUTION_LOW";
 }
 
-/** Stronger reasoning for plate estimates; keep labels cheap (OCR-ish). */
+/** Low effort for plate estimates; keep labels cheapest (OCR-ish). */
 export function thinkingLevelForMode(mode: ScanMode): ThinkingLevel {
-  return mode === "meal" ? "high" : "minimal";
+  return mode === "meal" ? "low" : "minimal";
 }
 
 const SENTINEL_LABELS = new Set([

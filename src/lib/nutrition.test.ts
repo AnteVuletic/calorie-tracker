@@ -35,8 +35,8 @@ describe("mediaResolutionForMode", () => {
 });
 
 describe("thinkingLevelForMode", () => {
-  it("uses stronger thinking for meals and minimal for labels", () => {
-    expect(thinkingLevelForMode("meal")).toBe("high");
+  it("uses low thinking for meals and minimal for labels", () => {
+    expect(thinkingLevelForMode("meal")).toBe("low");
     expect(thinkingLevelForMode("label")).toBe("minimal");
   });
 });
