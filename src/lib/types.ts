@@ -1,8 +1,26 @@
-import type { ScanMode } from "@/lib/gemini";
-
 export type MealStatus = "pending" | "processing" | "logged" | "fail";
 
-export type { ScanMode };
+export type ScanMode = "meal" | "label";
+
+export type MacroTotals = {
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+};
+
+export type MealItem = {
+  id: string;
+  name: string;
+  /** Gemini serving pair; current `grams` always scale from this, never from a prior edit. */
+  basis: { grams: number; nutrition: MacroTotals };
+  grams: number;
+};
+
+export type MealItemEdit =
+  | { kind: "setGrams"; itemId: string; grams: number }
+  | { kind: "remove"; itemId: string }
+  | { kind: "scalePlate"; factor: number };
 
 export type Meal = {
   id: string;
@@ -32,13 +50,8 @@ export type Meal = {
   nextAttemptAt?: string;
   /** Last scan/queue error, if any */
   lastError?: string;
-};
-
-export type MacroTotals = {
-  calories: number;
-  proteinG: number;
-  carbsG: number;
-  fatG: number;
+  /** Present on newly logged meal-photo scans. Absent for labels and legacy rows. */
+  items?: MealItem[];
 };
 
 /** Max failed attempts before status becomes fail (1 initial + 3 retries). */
