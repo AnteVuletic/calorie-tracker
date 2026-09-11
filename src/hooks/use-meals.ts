@@ -14,11 +14,12 @@ import {
   type NewMealInput,
 } from "@/lib/db";
 import { msUntilNextLocalMidnight, toDayKey } from "@/lib/dates";
-import type { Meal } from "@/lib/types";
+import type { Meal, MealItemEdit } from "@/lib/types";
 import { sumMeals } from "@/lib/types";
 import {
   markMealPending,
   processPendingScans,
+  saveMealItemEdits,
   subscribeMealsChanged,
   updateLabelPortionAndRescan,
   updateMealContextAndRescan,
@@ -119,6 +120,11 @@ export function useMealsForDay(dayKey: string) {
     },
     updateContext: async (id: string, extraContext: string) => {
       const meal = await updateMealContextAndRescan(id, extraContext);
+      await refresh({ quiet: true });
+      return meal;
+    },
+    saveItemEdits: async (id: string, edits: readonly MealItemEdit[]) => {
+      const meal = await saveMealItemEdits(id, edits);
       await refresh({ quiet: true });
       return meal;
     },
