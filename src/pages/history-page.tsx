@@ -261,6 +261,9 @@ export function HistoryPage() {
                   .updateContext(id, extraContext)
                   .then(() => refreshRange())
               }
+              onSaveItemEdits={(id, edits) =>
+                dayState.saveItemEdits(id, edits).then(() => refreshRange())
+              }
             />
           ))
         )}

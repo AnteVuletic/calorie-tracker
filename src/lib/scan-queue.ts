@@ -14,6 +14,7 @@ import {
   parsePortionInput,
   scaleLabelNutrition,
 } from "@/lib/gemini";
+import { saveMealPhotoEstimate } from "@/lib/meal-items";
 import { MAX_SCAN_RETRIES, type Meal } from "@/lib/types";
 
 /** Ensure Gemini gets a readable Blob (maps dead IDB blob refs to a clear error). */
@@ -80,6 +81,7 @@ export async function markMealPending(mealId: string): Promise<Meal> {
     proteinG: 0,
     carbsG: 0,
     fatG: 0,
+    items: undefined,
     lastError: undefined,
     retryCount: 0,
     nextAttemptAt: undefined,
@@ -135,6 +137,7 @@ export async function updateMealContextAndRescan(
     proteinG: 0,
     carbsG: 0,
     fatG: 0,
+    items: undefined,
     lastError: undefined,
     retryCount: 0,
     nextAttemptAt: undefined,
@@ -215,22 +218,12 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
         lastError: undefined,
       });
     } else {
-      const result = await analyzeMealImage(
+      const estimate = await analyzeMealImage(
         apiKey,
         imageBlob,
         fresh.extraContext,
       );
-      await updateMeal(meal.id, {
-        status: "logged",
-        label: result.label,
-        calories: result.calories,
-        proteinG: result.proteinG,
-        carbsG: result.carbsG,
-        fatG: result.fatG,
-        retryCount: 0,
-        nextAttemptAt: undefined,
-        lastError: undefined,
-      });
+      await saveMealPhotoEstimate(fresh.id, estimate);
     }
     return true;
   } catch (err) {

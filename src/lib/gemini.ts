@@ -1,8 +1,10 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { blobToBase64 } from "@/lib/image";
 import { roundMacro } from "@/lib/dates";
+import { scaleMacros, type MealPhotoEstimate } from "@/lib/meal-items";
+import type { MealItem, ScanMode } from "@/lib/types";
 
-export type ScanMode = "meal" | "label";
+export type { ScanMode };
 
 export type ScanResult = {
   label: string;
@@ -52,12 +54,16 @@ const SENTINEL_LABELS = new Set([
   "not a nutrition label",
 ]);
 
+const MAX_MEAL_ITEMS = 8;
+
 const MEAL_PROMPT = `You are a nutrition estimator. Analyze this meal photo.
 Estimate the full plate as served (one serving unless clearly multiple).
 Return ONLY valid JSON with this exact shape (no markdown):
-{"label":"short food name","calories":number,"proteinG":number,"carbsG":number,"fatG":number}
-Use grams for macros. Round calories to nearest integer; macros to 1 decimal.
-If the image is not food, return JSON with label "Not food" and zeros.`;
+{"label":"short dish name","items":[{"name":"component name","estimatedGrams":number,"calories":number,"proteinG":number,"carbsG":number,"fatG":number}]}
+Split into 1–8 user-recognizable components (protein, starch, veg, and calorically significant oils/sauces). Combine inseparable mixed dishes into one item. One item is valid for a soup or smoothie.
+Each item's calories and macros describe exactly that item's estimatedGrams, not per 100g. Do not emit plate-level totals.
+Use grams for macros. Keep numeric precision; do not round away decimals.
+If the image is not food, return JSON with label "Not food" and "items":[].`;
 
 const LABEL_PROMPT = `You are reading a packaged-food nutrition facts label (not a barcode).
 Extract the product name and the nutrition numbers exactly as printed for ONE stated basis
@@ -149,7 +155,7 @@ async function runVision(
   const generationConfig = {
     responseMimeType: "application/json",
     // Meal thinking can consume output budget; leave headroom for JSON.
-    maxOutputTokens: mode === "meal" ? 2048 : 512,
+    maxOutputTokens: mode === "meal" ? 4096 : 512,
     thinkingConfig: { thinkingLevel },
     mediaResolution: mediaResolutionForMode(mode),
   };
@@ -179,18 +185,75 @@ User-provided context (use this to resolve ambiguities such as meat type, dish i
 "${hint}"`;
 }
 
+function readNonNegativeNumber(value: unknown, field: string): number {
+  const n = readFiniteNumber(value, field);
+  if (n < 0) {
+    throw new Error(`Scan response has a negative ${field}`);
+  }
+  return n;
+}
+
+function parseMealItemJson(value: unknown, index: number): MealItem {
+  if (!value || typeof value !== "object") {
+    throw new Error(`Meal item ${index + 1} is invalid`);
+  }
+  const obj = value as Record<string, unknown>;
+  const name = String(obj.name ?? "").trim();
+  if (!name) {
+    throw new Error(`Meal item ${index + 1} is missing a name`);
+  }
+  const estimatedGrams = readFiniteNumber(obj.estimatedGrams, "estimatedGrams");
+  if (estimatedGrams <= 0) {
+    throw new Error(`Meal item ${index + 1} has invalid estimatedGrams`);
+  }
+  const nutrition = {
+    calories: readNonNegativeNumber(obj.calories, "calories"),
+    proteinG: readNonNegativeNumber(obj.proteinG, "proteinG"),
+    carbsG: readNonNegativeNumber(obj.carbsG, "carbsG"),
+    fatG: readNonNegativeNumber(obj.fatG, "fatG"),
+  };
+  return {
+    id: crypto.randomUUID(),
+    name,
+    grams: estimatedGrams,
+    basis: { grams: estimatedGrams, nutrition },
+  };
+}
+
+export function parseMealPhotoEstimate(data: unknown): MealPhotoEstimate {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid scan response");
+  }
+  const obj = data as Record<string, unknown>;
+  const label = String(obj.label ?? "").trim() || "Meal";
+  assertNotSentinel(label);
+  if (!Array.isArray(obj.items)) {
+    throw new Error("Meal estimate is missing items");
+  }
+  if (obj.items.length === 0) {
+    throw new Error("Meal estimate has no items");
+  }
+  if (obj.items.length > MAX_MEAL_ITEMS) {
+    throw new Error(`Meal estimate has more than ${MAX_MEAL_ITEMS} items`);
+  }
+  return {
+    label,
+    items: obj.items.map(parseMealItemJson),
+  };
+}
+
 export async function analyzeMealImage(
   apiKey: string,
   image: Blob,
   extraContext?: string,
-): Promise<ScanResult> {
+): Promise<MealPhotoEstimate> {
   const text = await runVision(
     apiKey,
     image,
     buildMealPrompt(extraContext),
     "meal",
   );
-  return parseScanResult(extractJson(text));
+  return parseMealPhotoEstimate(extractJson(text));
 }
 
 export async function analyzeNutritionLabel(
@@ -206,23 +269,18 @@ export function scaleLabelNutrition(
   label: LabelScanResult,
   gramsEaten: number,
 ): ScanResult | null {
-  if (!Number.isFinite(gramsEaten) || gramsEaten <= 0) return null;
-  if (!Number.isFinite(label.basisGrams) || label.basisGrams <= 0) return null;
-  const factor = gramsEaten / label.basisGrams;
-  const calories = label.calories * factor;
-  const proteinG = label.proteinG * factor;
-  const carbsG = label.carbsG * factor;
-  const fatG = label.fatG * factor;
-  if (![calories, proteinG, carbsG, fatG].every((n) => Number.isFinite(n))) {
-    return null;
-  }
-  return {
-    label: label.label,
-    calories: Math.max(0, Math.round(calories)),
-    proteinG: Math.max(0, roundMacro(proteinG)),
-    carbsG: Math.max(0, roundMacro(carbsG)),
-    fatG: Math.max(0, roundMacro(fatG)),
-  };
+  const scaled = scaleMacros(
+    {
+      calories: label.calories,
+      proteinG: label.proteinG,
+      carbsG: label.carbsG,
+      fatG: label.fatG,
+    },
+    label.basisGrams,
+    gramsEaten,
+  );
+  if (!scaled) return null;
+  return { label: label.label, ...scaled };
 }
 
 export type PortionInput =
