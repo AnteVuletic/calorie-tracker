@@ -110,7 +110,24 @@ function mealFromRecord(raw: MealRecord): Meal {
 }
 
 function recordMeta(meal: Meal): Omit<Meal, "imageBlob"> {
-  const { imageBlob: _discard, items, ...meta } = meal;
+  const items = meal.items;
+  const meta: Omit<Meal, "imageBlob"> = {
+    id: meal.id,
+    createdAt: meal.createdAt,
+    dayKey: meal.dayKey,
+    label: meal.label,
+    calories: meal.calories,
+    proteinG: meal.proteinG,
+    carbsG: meal.carbsG,
+    fatG: meal.fatG,
+    status: meal.status,
+    scanMode: meal.scanMode,
+    portionRaw: meal.portionRaw,
+    extraContext: meal.extraContext,
+    retryCount: meal.retryCount,
+    nextAttemptAt: meal.nextAttemptAt,
+    lastError: meal.lastError,
+  };
   if (items && items.length > 0) {
     return { ...meta, items };
   }
