@@ -30,7 +30,6 @@ import {
   applyMealItemEdits,
   macrosForItem,
   mealHasEditableItems,
-  scaleItem,
   sumItems,
 } from "@/lib/meal-items";
 import { sumMeals, type MealItem } from "@/lib/types";
@@ -408,7 +407,7 @@ const PLATE_TOTALS = {
 describe("meal item algebra", () => {
   it("scales an item from the frozen basis, not from a previous edit", () => {
     const [chicken] = chickenRicePlate();
-    expect(scaleItem(chicken)).toEqual({
+    expect(macrosForItem(chicken)).toEqual({
       calories: 297,
       proteinG: 55.8,
       carbsG: 0,
@@ -417,12 +416,13 @@ describe("meal item algebra", () => {
     const doubled = applyMealItemEdits([chicken], [
       { kind: "setGrams", itemId: "chicken", grams: 360 },
     ])[0];
-    expect(scaleItem(doubled)).toEqual({
+    expect(macrosForItem(doubled)).toEqual({
       calories: 594,
       proteinG: 111.6,
       carbsG: 0,
       fatG: 13,
     });
+    expect(doubled.basis).toEqual(chicken.basis);
   });
 
   it("uses the sum of rounded row macros as the meal cache", () => {

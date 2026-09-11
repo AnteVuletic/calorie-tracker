@@ -16,10 +16,11 @@ import {
 import { msUntilNextLocalMidnight, toDayKey } from "@/lib/dates";
 import type { Meal, MealItemEdit } from "@/lib/types";
 import { sumMeals } from "@/lib/types";
+import { saveMealItemEdits } from "@/lib/meal-items";
 import {
   markMealPending,
+  notifyMealsChanged,
   processPendingScans,
-  saveMealItemEdits,
   subscribeMealsChanged,
   updateLabelPortionAndRescan,
   updateMealContextAndRescan,
@@ -125,6 +126,7 @@ export function useMealsForDay(dayKey: string) {
     },
     saveItemEdits: async (id: string, edits: readonly MealItemEdit[]) => {
       const meal = await saveMealItemEdits(id, edits);
+      notifyMealsChanged();
       await refresh({ quiet: true });
       return meal;
     },

@@ -59,25 +59,6 @@ export function scaleMacros(
   };
 }
 
-export function scaleItem(item: MealItem): MacroTotals {
-  const fromGrams = item.basis.grams;
-  const toGrams = item.grams;
-  if (!Number.isFinite(fromGrams) || fromGrams <= 0) {
-    throw new Error("Item is missing a valid basis weight");
-  }
-  if (!Number.isFinite(toGrams) || toGrams <= 0) {
-    throw new Error("Item grams must be a positive number");
-  }
-  const factor = toGrams / fromGrams;
-  const nutrition = item.basis.nutrition;
-  return {
-    calories: nutrition.calories * factor,
-    proteinG: nutrition.proteinG * factor,
-    carbsG: nutrition.carbsG * factor,
-    fatG: nutrition.fatG * factor,
-  };
-}
-
 export function macrosForItem(item: MealItem): MacroTotals {
   const scaled = scaleMacros(
     item.basis.nutrition,

@@ -35,6 +35,7 @@ function rowsFromItems(items: MealItem[]): DraftRow[] {
 function editsFromDraft(
   original: MealItem[],
   draft: DraftRow[],
+  plateFactor: number,
 ): MealItemEdit[] | string {
   if (draft.length === 0) {
     return "Keep at least one item, or Rescan the meal";
@@ -42,6 +43,10 @@ function editsFromDraft(
 
   const remaining = new Map(draft.map((row) => [row.id, row]));
   const edits: MealItemEdit[] = [];
+
+  if (plateFactor !== 1) {
+    edits.push({ kind: "scalePlate", factor: plateFactor });
+  }
 
   for (const item of original) {
     if (!remaining.has(item.id)) {
@@ -55,7 +60,9 @@ function editsFromDraft(
       return `Enter a positive gram amount for ${row.name}`;
     }
     const orig = original.find((item) => item.id === row.id);
-    if (orig && orig.grams !== grams) {
+    if (!orig) continue;
+    const expectedAfterScale = orig.grams * plateFactor;
+    if (Math.abs(grams - expectedAfterScale) > 1e-6) {
       edits.push({ kind: "setGrams", itemId: row.id, grams });
     }
   }
@@ -99,10 +106,14 @@ export function MealItemsEditor({
 }) {
   const items = meal.items;
   const [draft, setDraft] = useState<DraftRow[]>([]);
+  const [plateFactor, setPlateFactor] = useState(1);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open && items) setDraft(rowsFromItems(items));
+    if (open && items) {
+      setDraft(rowsFromItems(items));
+      setPlateFactor(1);
+    }
   }, [open, items]);
 
   const updateGrams = (id: string, grams: string) => {
@@ -120,6 +131,7 @@ export function MealItemsEditor({
   };
 
   const scaleDraft = (factor: number) => {
+    setPlateFactor((prev) => prev * factor);
     setDraft((rows) =>
       rows.map((row) => {
         const grams = parseDraftGrams(row.grams);
@@ -131,7 +143,7 @@ export function MealItemsEditor({
 
   const save = async () => {
     if (!items) return;
-    const result = editsFromDraft(items, draft);
+    const result = editsFromDraft(items, draft, plateFactor);
     if (typeof result === "string") {
       toast.error(result);
       return;

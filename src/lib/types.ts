@@ -12,8 +12,8 @@ export type MacroTotals = {
 export type MealItem = {
   id: string;
   name: string;
-  /** Gemini serving pair; current `grams` always scale from this, never from a prior edit. */
-  basis: { grams: number; nutrition: MacroTotals };
+  /** Frozen Gemini serving; edits change `grams` only. */
+  readonly basis: Readonly<{ grams: number; nutrition: Readonly<MacroTotals> }>;
   grams: number;
 };
 

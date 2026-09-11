@@ -14,15 +14,8 @@ import {
   parsePortionInput,
   scaleLabelNutrition,
 } from "@/lib/gemini";
-import {
-  saveMealItemEdits as persistMealItemEdits,
-  saveMealPhotoEstimate,
-} from "@/lib/meal-items";
-import {
-  MAX_SCAN_RETRIES,
-  type Meal,
-  type MealItemEdit,
-} from "@/lib/types";
+import { saveMealPhotoEstimate } from "@/lib/meal-items";
+import { MAX_SCAN_RETRIES, type Meal } from "@/lib/types";
 
 /** Ensure Gemini gets a readable Blob (maps dead IDB blob refs to a clear error). */
 async function materializeImageBlob(blob: Blob | undefined): Promise<Blob> {
@@ -79,15 +72,6 @@ function scheduleBackoffDrain() {
       void processPendingScans({ silent: true });
     }, delay);
   })();
-}
-
-export async function saveMealItemEdits(
-  mealId: string,
-  edits: readonly MealItemEdit[],
-): Promise<Meal> {
-  const meal = await persistMealItemEdits(mealId, edits);
-  notifyMealsChanged();
-  return meal;
 }
 
 export async function markMealPending(mealId: string): Promise<Meal> {
