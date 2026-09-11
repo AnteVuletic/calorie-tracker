@@ -36,7 +36,6 @@ function cloneItem(item: MealItem): MealItem {
   };
 }
 
-/** Shared by meal items and label portion scaling. Null when weights are invalid. */
 export function scaleMacros(
   nutrition: MacroTotals,
   fromGrams: number,
@@ -60,7 +59,6 @@ export function scaleMacros(
   };
 }
 
-/** Unrounded nutrition at the item's current grams, from the frozen basis pair. */
 export function scaleItem(item: MealItem): MacroTotals {
   const fromGrams = item.basis.grams;
   const toGrams = item.grams;
@@ -80,7 +78,6 @@ export function scaleItem(item: MealItem): MacroTotals {
   };
 }
 
-/** Rounded macros shown on a row, matching label-scan rounding. */
 export function macrosForItem(item: MealItem): MacroTotals {
   const scaled = scaleMacros(
     item.basis.nutrition,

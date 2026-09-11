@@ -220,7 +220,6 @@ function parseMealItemJson(value: unknown, index: number): MealItem {
   };
 }
 
-/** Parse meal-photo JSON into a labeled item list. Empty or malformed items throw. */
 export function parseMealPhotoEstimate(data: unknown): MealPhotoEstimate {
   if (!data || typeof data !== "object") {
     throw new Error("Invalid scan response");

@@ -81,7 +81,6 @@ function scheduleBackoffDrain() {
   })();
 }
 
-/** Local amount correction. Does not call Gemini. */
 export async function saveMealItemEdits(
   mealId: string,
   edits: readonly MealItemEdit[],
