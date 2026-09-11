@@ -160,8 +160,7 @@ export function MealItemsEditor({
         <DialogHeader>
           <DialogTitle>Edit amounts</DialogTitle>
           <DialogDescription>
-            Change how much you ate. Totals update immediately without a new
-            scan.
+            Change how much you ate. Saving updates totals without a new scan.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
