@@ -264,6 +264,37 @@ export async function analyzeNutritionLabel(
   return parseLabelScanResult(extractJson(text));
 }
 
+/** True when cached label OCR can drive deterministic portion scaling. */
+export function isUsableLabelNutrition(
+  value: unknown,
+): value is LabelScanResult {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  const label = typeof obj.label === "string" ? obj.label.trim() : "";
+  if (!label) return false;
+  const calories = obj.calories;
+  const proteinG = obj.proteinG;
+  const carbsG = obj.carbsG;
+  const fatG = obj.fatG;
+  const basisGrams = obj.basisGrams;
+  if (
+    typeof calories !== "number" ||
+    !Number.isFinite(calories) ||
+    typeof proteinG !== "number" ||
+    !Number.isFinite(proteinG) ||
+    typeof carbsG !== "number" ||
+    !Number.isFinite(carbsG) ||
+    typeof fatG !== "number" ||
+    !Number.isFinite(fatG) ||
+    typeof basisGrams !== "number" ||
+    !Number.isFinite(basisGrams) ||
+    basisGrams <= 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Scale label nutrition from its printed basis to the grams the user ate. */
 export function scaleLabelNutrition(
   label: LabelScanResult,

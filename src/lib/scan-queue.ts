@@ -11,6 +11,7 @@ import {
   analyzeNutritionLabel,
   estimatePortionGrams,
   formatPortionSuffix,
+  isUsableLabelNutrition,
   parsePortionInput,
   scaleLabelNutrition,
 } from "@/lib/gemini";
@@ -191,7 +192,11 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
         throw new Error('Enter grams or a portion like "1 teaspoon"');
       }
 
-      const label = await analyzeNutritionLabel(apiKey, imageBlob);
+      const cached = isUsableLabelNutrition(fresh.labelNutrition)
+        ? fresh.labelNutrition
+        : null;
+      const label =
+        cached ?? (await analyzeNutritionLabel(apiKey, imageBlob));
       const grams =
         portion.kind === "grams"
           ? portion.grams
@@ -213,6 +218,7 @@ async function processOne(apiKey: string, meal: Meal): Promise<boolean> {
         proteinG: scaled.proteinG,
         carbsG: scaled.carbsG,
         fatG: scaled.fatG,
+        labelNutrition: label,
         retryCount: 0,
         nextAttemptAt: undefined,
         lastError: undefined,
