@@ -5,6 +5,7 @@ import {
   formatPortionSuffix,
   GEMINI_LABEL_MODEL,
   GEMINI_MEAL_MODEL,
+  isUsableLabelNutrition,
   mediaResolutionForMode,
   modelForMode,
   parseLabelScanResult,
@@ -192,6 +193,45 @@ describe("parseLabelScanResult + scaleLabelNutrition", () => {
         basisGrams: 100,
       }),
     ).toThrow(/nutrition label/i);
+  });
+});
+
+describe("isUsableLabelNutrition", () => {
+  const valid = {
+    label: "Yogurt",
+    calories: 59,
+    proteinG: 10,
+    carbsG: 3.6,
+    fatG: 0.4,
+    basisGrams: 100,
+  };
+
+  it("accepts a complete cached label OCR payload", () => {
+    expect(isUsableLabelNutrition(valid)).toBe(true);
+  });
+
+  it("rejects missing product name, non-finite macros, or non-positive basis", () => {
+    expect(isUsableLabelNutrition(null)).toBe(false);
+    expect(isUsableLabelNutrition({ ...valid, label: "  " })).toBe(false);
+    expect(isUsableLabelNutrition({ ...valid, calories: Number.NaN })).toBe(
+      false,
+    );
+    expect(isUsableLabelNutrition({ ...valid, basisGrams: 0 })).toBe(false);
+    expect(isUsableLabelNutrition({ ...valid, proteinG: undefined })).toBe(
+      false,
+    );
+  });
+
+  it("scales deterministically from a cached label for a gram portion", () => {
+    expect(isUsableLabelNutrition(valid)).toBe(true);
+    const scaled = scaleLabelNutrition(valid, 150);
+    expect(scaled).toEqual({
+      label: "Yogurt",
+      calories: Math.round((59 * 150) / 100),
+      proteinG: 15,
+      carbsG: 5.4,
+      fatG: 0.6,
+    });
   });
 });
 

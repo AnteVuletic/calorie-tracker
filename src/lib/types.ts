@@ -1,4 +1,4 @@
-import type { ScanMode } from "@/lib/gemini";
+import type { LabelScanResult, ScanMode } from "@/lib/gemini";
 
 export type MealStatus = "pending" | "processing" | "logged" | "fail";
 
@@ -26,6 +26,11 @@ export type Meal = {
   portionRaw?: string;
   /** Optional user hints for meal-photo AI (e.g. meat type, bowl size) */
   extraContext?: string;
+  /**
+   * Printed label nutrients for basisGrams; set after successful label OCR.
+   * Enables deterministic reuse without re-scanning the label image.
+   */
+  labelNutrition?: LabelScanResult;
   /** Failed attempts so far (used for exponential backoff) */
   retryCount?: number;
   /** ISO time when a pending meal may be attempted again */

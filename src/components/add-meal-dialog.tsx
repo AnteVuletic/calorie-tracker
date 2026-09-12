@@ -26,7 +26,13 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useObjectUrl } from "@/hooks/use-object-url";
 import { useOnlineStatus } from "@/hooks/use-meals";
-import { parsePortionInput, type ScanMode } from "@/lib/gemini";
+import {
+  formatPortionSuffix,
+  isUsableLabelNutrition,
+  parsePortionInput,
+  scaleLabelNutrition,
+  type ScanMode,
+} from "@/lib/gemini";
 import { compressImage, compressOptionsForMode } from "@/lib/image";
 import { getGeminiApiKey, getLoggedLabelMeals } from "@/lib/db";
 import type { NewMealInput } from "@/lib/db";
@@ -163,13 +169,24 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     scanMode: ScanMode,
     portion?: string,
     context?: string,
+    extras?: Pick<NewMealInput, "labelNutrition"> & {
+      /** When set, skip the pending queue and write a logged meal. */
+      logged?: {
+        label: string;
+        calories: number;
+        proteinG: number;
+        carbsG: number;
+        fatG: number;
+      };
+    },
   ) => {
     if (scanMode === "label" && !parsePortionInput(portion ?? "")) {
       toast.error('Enter grams or a portion like "1 teaspoon"');
       return;
     }
 
-    if (online) {
+    const logged = extras?.logged;
+    if (!logged && online) {
       const apiKey = await getGeminiApiKey();
       if (!apiKey?.trim()) {
         toast.error("Add your Gemini API key in Settings");
@@ -180,6 +197,28 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
     try {
       setBusy(true);
       const trimmedContext = context?.trim();
+      if (logged) {
+        await onSaved({
+          imageBlob,
+          label: logged.label,
+          calories: logged.calories,
+          proteinG: logged.proteinG,
+          carbsG: logged.carbsG,
+          fatG: logged.fatG,
+          status: "logged",
+          scanMode,
+          portionRaw: scanMode === "label" ? portion?.trim() : undefined,
+          extraContext:
+            scanMode === "meal" && trimmedContext ? trimmedContext : undefined,
+          labelNutrition: extras?.labelNutrition,
+          retryCount: 0,
+          nextAttemptAt: undefined,
+        });
+        toast.success("Meal logged");
+        handleOpenChange(false);
+        return;
+      }
+
       await onSaved({
         imageBlob,
         label: "Pending scan…",
@@ -192,6 +231,7 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
         portionRaw: scanMode === "label" ? portion?.trim() : undefined,
         extraContext:
           scanMode === "meal" && trimmedContext ? trimmedContext : undefined,
+        labelNutrition: extras?.labelNutrition,
         retryCount: 0,
         nextAttemptAt: undefined,
       });
@@ -215,10 +255,46 @@ export function AddMealDialog({ open, onOpenChange, onSaved }: Props) {
   const analyze = async () => {
     if (mode === "label" && labelTab === "previous") {
       if (!selectedPrevious) return;
+      const portion = parsePortionInput(portionRaw);
+      if (!portion) {
+        toast.error('Enter grams or a portion like "1 teaspoon"');
+        return;
+      }
+      const cached = isUsableLabelNutrition(selectedPrevious.labelNutrition)
+        ? selectedPrevious.labelNutrition
+        : undefined;
+
+      if (cached && portion.kind === "grams") {
+        const scaled = scaleLabelNutrition(cached, portion.grams);
+        if (!scaled) {
+          toast.error("Could not scale label nutrition");
+          return;
+        }
+        await queueLabelOrMeal(
+          selectedPrevious.imageBlob,
+          "label",
+          portionRaw,
+          undefined,
+          {
+            labelNutrition: cached,
+            logged: {
+              label: `${scaled.label} (${formatPortionSuffix(portion, portion.grams)})`,
+              calories: scaled.calories,
+              proteinG: scaled.proteinG,
+              carbsG: scaled.carbsG,
+              fatG: scaled.fatG,
+            },
+          },
+        );
+        return;
+      }
+
       await queueLabelOrMeal(
         selectedPrevious.imageBlob,
         "label",
         portionRaw,
+        undefined,
+        cached ? { labelNutrition: cached } : undefined,
       );
       return;
     }
