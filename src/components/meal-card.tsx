@@ -4,13 +4,15 @@ import {
   MoreVertical,
   Pencil,
   RefreshCw,
+  Scale,
   Trash2,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
-import type { Meal, MealStatus } from "@/lib/types";
+import type { Meal, MealItemEdit, MealStatus } from "@/lib/types";
 import { formatMacro } from "@/lib/dates";
 import { parsePortionInput } from "@/lib/gemini";
+import { mealHasEditableItems } from "@/lib/meal-items";
 import { useObjectUrl } from "@/hooks/use-object-url";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,6 +32,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  MealItemSummary,
+  MealItemsEditor,
+} from "@/components/meal-items";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<MealStatus, string> = {
@@ -68,12 +74,17 @@ export function MealCard({
   onRescan,
   onUpdatePortion,
   onUpdateContext,
+  onSaveItemEdits,
 }: {
   meal: Meal;
   onDelete?: (id: string) => void;
   onRescan?: (id: string) => void;
   onUpdatePortion?: (id: string, portionRaw: string) => Promise<void>;
   onUpdateContext?: (id: string, extraContext: string) => Promise<void>;
+  onSaveItemEdits?: (
+    id: string,
+    edits: readonly MealItemEdit[],
+  ) => Promise<void>;
 }) {
   const url = useObjectUrl(meal.imageBlob, meal.id);
   const isQueued =
@@ -85,6 +96,8 @@ export function MealCard({
     isLabel && Boolean(onUpdatePortion) && meal.status !== "processing";
   const canEditContext =
     isMealScan && Boolean(onUpdateContext) && meal.status !== "processing";
+  const canEditItems =
+    mealHasEditableItems(meal) && Boolean(onSaveItemEdits);
 
   const [portionOpen, setPortionOpen] = useState(false);
   const [portionDraft, setPortionDraft] = useState(meal.portionRaw ?? "");
@@ -93,6 +106,8 @@ export function MealCard({
   const [contextOpen, setContextOpen] = useState(false);
   const [contextDraft, setContextDraft] = useState(meal.extraContext ?? "");
   const [contextBusy, setContextBusy] = useState(false);
+
+  const [itemsOpen, setItemsOpen] = useState(false);
 
   const openPortionEditor = () => {
     setPortionDraft(meal.portionRaw ?? "");
@@ -192,7 +207,11 @@ export function MealCard({
                   ) : null}
                 </p>
               </div>
-              {onDelete || onRescan || canEditPortion || canEditContext ? (
+              {onDelete ||
+              onRescan ||
+              canEditPortion ||
+              canEditContext ||
+              canEditItems ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -205,6 +224,12 @@ export function MealCard({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    {canEditItems ? (
+                      <DropdownMenuItem onClick={() => setItemsOpen(true)}>
+                        <Scale className="size-4" />
+                        Edit amounts
+                      </DropdownMenuItem>
+                    ) : null}
                     {canEditPortion ? (
                       <DropdownMenuItem onClick={openPortionEditor}>
                         <Pencil className="size-4" />
@@ -303,11 +328,33 @@ export function MealCard({
                   P {formatMacro(meal.proteinG)}g · C{" "}
                   {formatMacro(meal.carbsG)}g · F {formatMacro(meal.fatG)}g
                 </p>
+                <MealItemSummary meal={meal} />
+                {canEditItems ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setItemsOpen(true)}
+                  >
+                    <Scale className="size-3.5" />
+                    Edit amounts
+                  </Button>
+                ) : null}
               </>
             )}
           </div>
         </CardContent>
       </Card>
+
+      {canEditItems && onSaveItemEdits ? (
+        <MealItemsEditor
+          meal={meal}
+          open={itemsOpen}
+          onOpenChange={setItemsOpen}
+          onSave={(edits) => onSaveItemEdits(meal.id, edits)}
+        />
+      ) : null}
 
       {canEditPortion ? (
         <Dialog open={portionOpen} onOpenChange={setPortionOpen}>

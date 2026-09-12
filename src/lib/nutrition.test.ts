@@ -9,6 +9,7 @@ import {
   mediaResolutionForMode,
   modelForMode,
   parseLabelScanResult,
+  parseMealPhotoEstimate,
   parsePortionGramsResult,
   parsePortionInput,
   parseScanResult,
@@ -26,7 +27,13 @@ import {
   nameSimilarity,
   productNameFromLabel,
 } from "@/lib/food-match";
-import { sumMeals } from "@/lib/types";
+import {
+  applyMealItemEdits,
+  macrosForItem,
+  mealHasEditableItems,
+  sumItems,
+} from "@/lib/meal-items";
+import { sumMeals, type MealItem } from "@/lib/types";
 
 describe("mediaResolutionForMode", () => {
   it("uses low for meals and medium for labels", () => {
@@ -65,6 +72,8 @@ describe("buildMealPrompt", () => {
   it("returns the base prompt when context is missing or blank", () => {
     const base = buildMealPrompt();
     expect(base).toContain("nutrition estimator");
+    expect(base).toContain("estimatedGrams");
+    expect(base).toContain('"items"');
     expect(base).not.toContain("User-provided context");
     expect(buildMealPrompt("   ")).toBe(base);
   });
@@ -137,6 +146,131 @@ describe("parseScanResult", () => {
       carbsG: 50,
       fatG: 8,
     });
+  });
+});
+
+describe("parseMealPhotoEstimate", () => {
+  const chickenItem = {
+    name: "  Grilled chicken  ",
+    estimatedGrams: 140,
+    calories: 231,
+    proteinG: 43.4,
+    carbsG: 0,
+    fatG: 5,
+  };
+
+  it("assigns ids, trims names, and keeps unrounded basis grams", () => {
+    const estimate = parseMealPhotoEstimate({
+      label: "Chicken rice bowl",
+      items: [
+        chickenItem,
+        {
+          name: "Rice",
+          estimatedGrams: 180.25,
+          calories: 234.2,
+          proteinG: 4.81,
+          carbsG: 49.5,
+          fatG: 0.5,
+        },
+      ],
+    });
+    expect(estimate.label).toBe("Chicken rice bowl");
+    expect(estimate.items).toHaveLength(2);
+    expect(estimate.items[0].name).toBe("Grilled chicken");
+    expect(estimate.items[0].grams).toBe(140);
+    expect(estimate.items[0].basis.grams).toBe(140);
+    expect(estimate.items[0].basis.nutrition).toEqual({
+      calories: 231,
+      proteinG: 43.4,
+      carbsG: 0,
+      fatG: 5,
+    });
+    expect(estimate.items[1].grams).toBe(180.25);
+    expect(estimate.items[1].basis.nutrition.proteinG).toBe(4.81);
+    expect(estimate.items[0].id).not.toBe(estimate.items[1].id);
+    expect(estimate.items[0].id.length).toBeGreaterThan(0);
+  });
+
+  it("rejects an empty item list instead of fabricating grams", () => {
+    expect(() =>
+      parseMealPhotoEstimate({ label: "Soup", items: [] }),
+    ).toThrow(/no items/i);
+    expect(() =>
+      parseMealPhotoEstimate({
+        label: "Soup",
+        calories: 200,
+        proteinG: 10,
+        carbsG: 20,
+        fatG: 5,
+      }),
+    ).toThrow(/missing items/i);
+  });
+
+  it("rejects invalid, incomplete, or oversized item lists", () => {
+    expect(() =>
+      parseMealPhotoEstimate({
+        label: "Soup",
+        items: [
+          {
+            name: "Soup",
+            estimatedGrams: 0,
+            calories: 100,
+            proteinG: 1,
+            carbsG: 10,
+            fatG: 1,
+          },
+        ],
+      }),
+    ).toThrow(/estimatedGrams/i);
+    expect(() =>
+      parseMealPhotoEstimate({
+        label: "Soup",
+        items: [
+          {
+            name: "Soup",
+            estimatedGrams: null,
+            calories: 100,
+            proteinG: 1,
+            carbsG: 10,
+            fatG: 1,
+          },
+        ],
+      }),
+    ).toThrow(/estimatedGrams/i);
+    expect(() =>
+      parseMealPhotoEstimate({
+        label: "Salad",
+        items: [
+          {
+            name: "Oil",
+            estimatedGrams: 10,
+            calories: -5,
+            proteinG: 0,
+            carbsG: 0,
+            fatG: 10,
+          },
+        ],
+      }),
+    ).toThrow(/negative calories/i);
+    expect(() =>
+      parseMealPhotoEstimate({
+        label: "Plate",
+        items: Array.from({ length: 9 }, (_, i) => ({
+          name: `Item ${i + 1}`,
+          estimatedGrams: 10,
+          calories: 10,
+          proteinG: 1,
+          carbsG: 1,
+          fatG: 1,
+        })),
+      }),
+    ).toThrow(/more than 8/i);
+  });
+
+  it("rejects a not-food sentinel even with an empty list", () => {
+    expect(() =>
+      parseMealPhotoEstimate({ label: "Not food", items: [] }),
+    ).toThrow(/doesn't look like food/i);
   });
 });
 
@@ -277,6 +411,162 @@ describe("parsePortionGramsResult + formatPortionSuffix", () => {
         5,
       ),
     ).toBe("one teaspoon · ~5g");
+  });
+});
+
+function chickenRicePlate(): MealItem[] {
+  return [
+    {
+      id: "chicken",
+      name: "Grilled chicken",
+      grams: 180,
+      basis: {
+        grams: 180,
+        nutrition: { calories: 297, proteinG: 55.8, carbsG: 0, fatG: 6.5 },
+      },
+    },
+    {
+      id: "rice",
+      name: "White rice",
+      grams: 150,
+      basis: {
+        grams: 150,
+        nutrition: { calories: 195, proteinG: 4.1, carbsG: 42, fatG: 0.4 },
+      },
+    },
+  ];
+}
+
+const PLATE_TOTALS = {
+  calories: 492,
+  proteinG: 59.9,
+  carbsG: 42,
+  fatG: 6.9,
+};
+
+describe("meal item algebra", () => {
+  it("scales an item from the frozen basis, not from a previous edit", () => {
+    const [chicken] = chickenRicePlate();
+    expect(macrosForItem(chicken)).toEqual({
+      calories: 297,
+      proteinG: 55.8,
+      carbsG: 0,
+      fatG: 6.5,
+    });
+    const doubled = applyMealItemEdits([chicken], [
+      { kind: "setGrams", itemId: "chicken", grams: 360 },
+    ])[0];
+    expect(macrosForItem(doubled)).toEqual({
+      calories: 594,
+      proteinG: 111.6,
+      carbsG: 0,
+      fatG: 13,
+    });
+    expect(doubled.basis).toEqual(chicken.basis);
+  });
+
+  it("uses the sum of rounded row macros as the meal cache", () => {
+    const items = chickenRicePlate();
+    expect(macrosForItem(items[0])).toEqual({
+      calories: 297,
+      proteinG: 55.8,
+      carbsG: 0,
+      fatG: 6.5,
+    });
+    expect(macrosForItem(items[1])).toEqual({
+      calories: 195,
+      proteinG: 4.1,
+      carbsG: 42,
+      fatG: 0.4,
+    });
+    expect(sumItems(items)).toEqual(PLATE_TOTALS);
+  });
+
+  it("returns original totals after scaling grams up then back", () => {
+    const items = chickenRicePlate();
+    const up = applyMealItemEdits(items, [
+      { kind: "setGrams", itemId: "chicken", grams: 240 },
+    ]);
+    expect(sumItems(up)).toEqual({
+      calories: 591,
+      proteinG: 78.5,
+      carbsG: 42,
+      fatG: 9.1,
+    });
+    const back = applyMealItemEdits(up, [
+      { kind: "setGrams", itemId: "chicken", grams: 180 },
+    ]);
+    expect(sumItems(back)).toEqual(PLATE_TOTALS);
+    expect(back[0].basis).toEqual(items[0].basis);
+  });
+
+  it("rejects removing the last item", () => {
+    const items = chickenRicePlate();
+    const withoutRice = applyMealItemEdits(items, [
+      { kind: "remove", itemId: "rice" },
+    ]);
+    expect(withoutRice).toHaveLength(1);
+    expect(withoutRice[0].id).toBe("chicken");
+    expect(sumItems(withoutRice)).toEqual({
+      calories: 297,
+      proteinG: 55.8,
+      carbsG: 0,
+      fatG: 6.5,
+    });
+    expect(() =>
+      applyMealItemEdits(withoutRice, [{ kind: "remove", itemId: "chicken" }]),
+    ).toThrow(/last item/i);
+  });
+
+  it("rewrites current grams on scalePlate and can scale back", () => {
+    const items = chickenRicePlate();
+    const half = applyMealItemEdits(items, [
+      { kind: "scalePlate", factor: 0.5 },
+    ]);
+    expect(half.map((item) => item.grams)).toEqual([90, 75]);
+    expect(half[0].basis.grams).toBe(180);
+    expect(sumItems(half)).toEqual({
+      calories: 247,
+      proteinG: 30,
+      carbsG: 21,
+      fatG: 3.5,
+    });
+    const restored = applyMealItemEdits(half, [
+      { kind: "scalePlate", factor: 2 },
+    ]);
+    expect(restored.map((item) => item.grams)).toEqual([180, 150]);
+    expect(sumItems(restored)).toEqual(PLATE_TOTALS);
+  });
+
+  it("hides the editor for labels, pending rows, and legacy meals", () => {
+    const items = chickenRicePlate();
+    expect(
+      mealHasEditableItems({
+        scanMode: "meal",
+        status: "logged",
+        items,
+      }),
+    ).toBe(true);
+    expect(
+      mealHasEditableItems({
+        scanMode: "meal",
+        status: "logged",
+      }),
+    ).toBe(false);
+    expect(
+      mealHasEditableItems({
+        scanMode: "label",
+        status: "logged",
+        items,
+      }),
+    ).toBe(false);
+    expect(
+      mealHasEditableItems({
+        scanMode: "meal",
+        status: "pending",
+        items,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -106,14 +106,40 @@ function mealFromRecord(raw: MealRecord): Meal {
     retryCount: raw.retryCount,
     nextAttemptAt: raw.nextAttemptAt,
     lastError: raw.lastError,
+    items: Array.isArray(raw.items) ? raw.items : undefined,
   };
+}
+
+function recordMeta(meal: Meal): Omit<Meal, "imageBlob"> {
+  const items = meal.items;
+  const meta: Omit<Meal, "imageBlob"> = {
+    id: meal.id,
+    createdAt: meal.createdAt,
+    dayKey: meal.dayKey,
+    label: meal.label,
+    calories: meal.calories,
+    proteinG: meal.proteinG,
+    carbsG: meal.carbsG,
+    fatG: meal.fatG,
+    status: meal.status,
+    scanMode: meal.scanMode,
+    portionRaw: meal.portionRaw,
+    extraContext: meal.extraContext,
+    retryCount: meal.retryCount,
+    nextAttemptAt: meal.nextAttemptAt,
+    lastError: meal.lastError,
+  };
+  if (items && items.length > 0) {
+    return { ...meta, items };
+  }
+  return meta;
 }
 
 async function toMealRecord(
   meal: Meal,
   existing?: MealRecord,
 ): Promise<MealRecord> {
-  const { imageBlob: _discard, ...meta } = meal;
+  const meta = recordMeta(meal);
 
   if (existing && hasImageBytes(existing)) {
     return {
@@ -315,6 +341,7 @@ export async function addMeal(meal: NewMealInput): Promise<Meal> {
     retryCount: meal.retryCount,
     nextAttemptAt: meal.nextAttemptAt,
     lastError: meal.lastError,
+    items: meal.items,
   };
   const record = await toMealRecord(draft);
   return putMealRecord(db, record);
@@ -334,7 +361,7 @@ export async function updateMeal(
   if (patch.imageBlob) {
     const current = mealFromRecord(existing);
     const next: Meal = { ...current, ...patch, id, imageBlob: patch.imageBlob };
-    const { imageBlob: _b, ...meta } = next;
+    const meta = recordMeta(next);
     const { imageBytes, imageMimeType } = await blobToImageBytes(patch.imageBlob);
     return putMealRecord(db, { ...meta, imageBytes, imageMimeType });
   }
@@ -343,7 +370,7 @@ export async function updateMeal(
   if (hasImageBytes(existing)) {
     const current = mealFromRecord(existing);
     const next: Meal = { ...current, ...patch, id };
-    const { imageBlob: _b, ...meta } = next;
+    const meta = recordMeta(next);
     return putMealRecord(db, {
       ...meta,
       imageBytes: existing.imageBytes,
@@ -364,7 +391,7 @@ export async function updateMeal(
     const record = await toMealRecord(next, existing);
     return putMealRecord(db, record);
   } catch {
-    const { imageBlob: _b, ...meta } = next;
+    const meta = recordMeta(next);
     return putMealRecord(db, {
       ...meta,
       imageBlob: existing.imageBlob,
